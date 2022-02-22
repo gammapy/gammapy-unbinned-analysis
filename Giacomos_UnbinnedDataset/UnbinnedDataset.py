@@ -128,29 +128,17 @@ class UnbinnedDataset(MapDataset):
             meta_table,
             name,
             )
+
+        self.events         = events 
         
-        self.events = events    
+        if not hasattr(self.npred_background(), 'data'):
+            self.npred_background        = self.npred_signal().copy
+            self.npred_background().data = np.zeros_like(self.npred_signal().data) 
+
+        
+            
+
     
-    def update_flux(self):
-        evaluator                 = list( self.evaluators.values() )[0]
-        if hasattr(self, 'geoms'): # for gammapy >= 0.19
-            evaluator.update(self.exposure, self.psf, self.edisp, self.geoms['geom'], 
-                         self.mask)
-        # SIGNAL FLUX
-        self.signal_flux_true     = evaluator.apply_exposure(evaluator.compute_flux())
-        self.signal_flux_obs      = evaluator.apply_edisp(self.signal_flux_true)
-        # BKG FLUX
-        if hasattr(self.npred_background(), 'data'):
-            self.bkg_flux         = self.npred_background()
-        else: # WE SET THE BKG TO ZERO IF THE BKG IS NOT PROVIDED
-            self.bkg_flux         = self.signal_flux_obs.copy()
-            self.bkg_flux.data    = np.zeros_like(self.signal_flux_obs.data) 
-        # TOTAL PRED. SIGNAL COUNTS
-        self.tot_signal_true      = np.sum(self.signal_flux_true.data)
-        self.tot_signal_obs       = np.sum(self.signal_flux_obs.data)
-        # TOTAL PRED. BKG COUNTS
-        self.tot_bkg              = np.sum(self.bkg_flux.data)
-   
             
     def __str__(self):
         str_ = f"{self.__class__.__name__}\n"
@@ -208,16 +196,12 @@ class UnbinnedDataset(MapDataset):
 
         
         
-    def get_coords(self,signal=True,bkg=True,obs=True):
+    def get_coords(self,signal=True,bkg=True):
         """Return the coordinates (edges, bin center, ..) 
-            of the binned predicted differential counts
+            of the binned predicted differential counts in energy
 
         Parameters
         ----------
-        obs          : Bool
-                True if dN/dE in observed  energy,
-                i.e. by incluidng edisp effects
-                By default is True
         signal        : Bool
                 True if you want to include in the
                 simulation the signal of gamma
@@ -235,50 +219,34 @@ class UnbinnedDataset(MapDataset):
             Width of the energy bins ,
             The corresponding dN/dE
         """
-        if bkg and not obs:
-            raise ValueError("If bkg is True then also obs must be True!")
         if not signal and not bkg:
             raise ValueError("Error, neither the bkg nor the signal is True!")
 
         
         # Define a counts array of zeros
-        if obs or bkg:
-            axes          =  self.signal_flux_obs.geom.axes
-            energy_axe    =  axes['energy']
-            counts        =  np.zeros_like(self.signal_flux_obs.data)
-        else:
-            axes          =  self.signal_flux_true.geom.axes
-            energy_axe    =  axes['energy_true']
-            counts        =  np.zeros_like(self.signal_flux_true.data)
-        while len(counts.shape) > 1:
-            counts      = counts.sum(axis=1)
-        
-        # Get the signal counts
-        if obs:
-            signal_counts =  self.signal_flux_obs.data
-        else:
-            signal_counts =  self.signal_flux_true.data
-        while len(signal_counts.shape) > 1:
-            signal_counts      = signal_counts.sum(axis=1)
-            
-        # bkg counts
-        bkg_counts        =  self.bkg_flux.data
-        while len(bkg_counts.shape) > 1:
-            bkg_counts      = bkg_counts.sum(axis=1)
-        
-        if bkg:
-            counts       += bkg_counts
+        axes          =  self.npred_signal().geom.axes
+        energy_axe    =  axes['energy']
+        signal_npred  =  self.npred_signal().data
+        npred_tot     =  np.zeros_like(signal_npred)
+        bkg_npred     =  self.npred_background().data
         if signal:
-            counts       += signal_counts
+            npred_tot += signal_npred
+        if bkg:
+            npred_tot += bkg_npred
+        
+        # marginalization over spatial coordinates
+        while len(npred_tot.shape) > 1:
+            npred_tot     = npred_tot.sum(axis=1)
+
 
         bin_centers      = np.array(energy_axe.center)
         bin_width        = np.array(energy_axe.bin_width)
         bin_edges        = np.array(energy_axe.edges)
         
-        return bin_edges,bin_centers, bin_width, counts
+        return bin_edges,bin_centers, bin_width, npred_tot
     
 
-    def predicted_dnde(self,energy,obs=True,bkg=True,signal=True):
+    def predicted_dnde(self,energy,signal=True, bkg=True):
         """Return the predicted differential counts [1/TeV]
            for the energy given in input
 
@@ -286,10 +254,6 @@ class UnbinnedDataset(MapDataset):
         ----------
         energy       : Quantity
                 must have energy dimension
-        obs          : Bool
-                True if dN/dE in observed  energy,
-                i.e. by incluidng edisp effects
-                By default is True
         signal        : Bool
                 True if you want to include in the
                 simulation the signal of gamma
@@ -300,14 +264,12 @@ class UnbinnedDataset(MapDataset):
                 By default is True
 
         """
-        if bkg and not obs:
-            raise ValueError("If bkg is True then also obs must be True!")
         if not signal and not bkg:
             raise ValueError("Error, neither the bkg nor the signal is True!")
             
         energy       = u.Quantity([energy]).flatten()
         energy       = energy.to(u.TeV)
-        bin_edges,bin_centers, bin_width, counts = self.get_coords(obs=obs,bkg=bkg, signal=signal)
+        bin_edges,bin_centers, bin_width, counts = self.get_coords(signal=signal, bkg=bkg)
         xp           = bin_centers
         fp           = counts/bin_width
         cond_left    = (energy >= bin_edges[0]*u.TeV) * (energy <= bin_centers[0]*u.TeV)
@@ -317,17 +279,13 @@ class UnbinnedDataset(MapDataset):
         dnde         = np.interp(energy.value, xp, fp, left=0, right=0)
         return dnde/ u.TeV
 
-    def plot_predicted_dnde(self, ax=None, fig=None, obs=True,bkg=False, signal=True, line=True,**kwargs):
+    def plot_predicted_dnde(self, ax=None, fig=None,signal=True,bkg=True,  line=True,**kwargs):
         """Plot the predicted differential counts dN/dE * E**2
 
         Parameters
         ----------
         energy       : Quantity
                 must have energy dimension
-        obs          : Bool
-                True if dN/dE in observed  energy,
-                i.e. by incluidng edisp effects
-                By default is True
         signal        : Bool
                 True if you want to include in the
                 simulation the signal of gamma
@@ -343,7 +301,7 @@ class UnbinnedDataset(MapDataset):
         ax.set_xscale("log")
         ax.set_yscale("log")
         
-        bin_edges,bin_centers, bin_width, counts = self.get_coords(obs=obs,bkg=bkg, signal=signal)
+        bin_edges,bin_centers, bin_width, counts = self.get_coords( signal=signal, bkg=bkg)
         dnde = counts/bin_width*bin_centers**2
         if line:
             ax.plot(bin_centers,dnde,**kwargs)
@@ -356,20 +314,9 @@ class UnbinnedDataset(MapDataset):
 
         Parameters
         ----------
-        energy       : Quantity
-                must have energy dimension
-        obs          : Bool
-                True if dN/dE in observed  energy,
-                i.e. by incluidng edisp effects
-                By default is True
-        signal        : Bool
-                True if you want to include in the
-                simulation the signal of gamma
-                By default is True
-        bkg          : Bool
-                True if you want to include in the
-                simulation the background
-                By default is True
+        
+        TO BE DONE!
+        
         """
         ax.grid(True,which='both',linewidth=0.8)
         ax.set_ylabel(r' $dN / dE \; E^2$   [TeV]',size=30)
@@ -397,7 +344,7 @@ class UnbinnedDataset(MapDataset):
     
 
     
-    def fake_events(self, signal=True, bkg=True, obs=True,random_state="random-seed"):
+    def fake(self, signal=True, bkg=True, random_state="random-seed"):
         """Simulate fake events for the current model and reduced IRFs.
 
         This method overwrites the events defined on the dataset object
@@ -408,10 +355,6 @@ class UnbinnedDataset(MapDataset):
         random_state : {int, 'random-seed', 'global-rng', `~numpy.random.RandomState`}
                 Defines random number generator initialisation.
                 Passed to `~gammapy.utils.random.get_random_state`.
-        obs          : Bool
-                True if dN/dE in observed  energy,
-                i.e. by incluidng edisp effects
-                By default is True
         signal        : Bool
                 True if you want to include in the
                 simulation the signal of gamma
@@ -422,8 +365,6 @@ class UnbinnedDataset(MapDataset):
                 By default is True
 
         """
-        if bkg and not obs:
-            raise ValueError("If bkg is True then also obs must be True!")
         if not signal and not bkg:
             raise ValueError("Error, neither the bkg nor the signal is True!")
         
@@ -432,25 +373,21 @@ class UnbinnedDataset(MapDataset):
         # EVENTS SIMULATION
         # IN THE FUTURE: INCLUDE THE ANGLE SIMULATION
         #
-        # FIRST, CHECK IF WE WANT TO SIMULATE JUST THE EVENTS IN TRUE ENERGY
-        if not obs:
-            sign_nevents  = random_state.poisson(self.tot_signal_true)
-            en_array      = random_energies(self.signal_flux_true, sign_nevents,random_state)    
-        else:
-            # SIGNAL SIMULATION
-            sign_nevents  = random_state.poisson(self.tot_signal_obs)
-            en_array_sign = random_energies(self.signal_flux_obs, sign_nevents,random_state)
-  
-            # BKG SIMULATION
-            bkg_nevents   = random_state.poisson(self.tot_bkg)
-            en_array_bkg  = random_energies(self.bkg_flux, bkg_nevents,random_state)
-    
-            if signal and bkg:
-                en_array  = np.append( np.array(en_array_sign.value), en_array_bkg.value) * en_array_bkg.unit
-            if signal and not bkg:
-                en_array  = en_array_sign
-            if not signal and bkg:
-                en_array  = en_array_bkg
+        # SIGNAL SIMULATION
+        tot_sign_pred  = self.npred_signal().data.sum()
+        sign_nevents  = random_state.poisson(tot_sign_pred)
+        en_array_sign = random_energies(self.npred_signal(), sign_nevents,random_state)
+        # BKG SIMULATION
+        tot_bkg_pred  = self.npred_background().data.sum()
+        bkg_nevents   = random_state.poisson(tot_bkg_pred)
+        en_array_bkg  = random_energies(self.npred_background(), bkg_nevents,random_state)
+
+        if signal and bkg:
+            en_array  = np.append( np.array(en_array_sign.value), en_array_bkg.value) * en_array_bkg.unit
+        if signal and not bkg:
+            en_array  = en_array_sign
+        if not signal and bkg:
+            en_array  = en_array_bkg
                 
         # CONVERTING THE ENERGIES IN AN EVENT LIST CLASS   
         wcs_geom          = self.geoms['geom']
@@ -471,14 +408,15 @@ class UnbinnedDataset(MapDataset):
     
     def stat_sum(self,**kwargs):
         """Unbinned likelihood given the current model parameters."""
-        self.update_flux()
         
         if self.events is None:
             stat     = -np.inf
         else:
             energies = self.events.energy
-            s, b     = self.tot_signal_obs,  self.tot_bkg
-            marks    = self.predicted_dnde(energies, obs=True).value
+
+            s         = self.npred_signal().data.sum()
+            b         = self.npred_background().data.sum()
+            marks    = self.predicted_dnde(energies).value
             # CHECK IF ALL MARKS ARE BIGGER THAN ZERO
             if np.sum( marks>0) == len(marks):
                 logmarks = np.sum(np.log(marks))
