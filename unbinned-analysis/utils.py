@@ -43,3 +43,26 @@ def make_edisp_factors(edisp2d, events, energy_axis_true, pointing, model_pos):
     m_min, m_max = edisp2d.axes['migra'].edges[[0,-1]]
     mask = (event_migra < m_max) & (event_migra > m_min)
     return values*mask
+
+def make_exposure_factors(livetime, aeff, pointing, coords):
+    """Get energy dispersion for a given event and true energy axis.
+
+        Parameters
+        ----------
+        livetime : `~astropy.units.quantity.Quantity`
+            livetime of the observation    
+        aeff : `~gammapy.irf.effective_area.EffectiveAreaTable2D`
+            effective area from the observaton
+        pointing : `~astropy.coordinates.SkyCoord`
+            Pointing position of the observation. Should be a single coordinates.
+        coords : `~gammapy.maps.coord.MapCoord`
+            coordinates on which the model will be evaluated. Needs true energy axis and skycoord.
+
+        Returns
+        -------
+        exposure : `~numpy.ndarray`
+            the exposure values for the unbinned evaluator.
+        """
+    offsets = coords.skycoord.separation(pointing)
+    exposure = aeff.evaluate(offset=offsets, energy_true=coords["energy_true"])
+    return (exposure * livetime).to("m2 s")
