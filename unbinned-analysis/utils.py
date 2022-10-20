@@ -1,3 +1,6 @@
+import numpy as np
+from gammapy.irf import EnergyDispersion2D
+
 def make_edisp_factors(edisp2d, events, energy_axis_true, pointing, model_pos):
     """Get energy dispersion for a given event and true energy axis.
 
