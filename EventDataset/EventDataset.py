@@ -87,6 +87,7 @@ class EventDataset(gammapy.datasets.Dataset):
         self._name = make_name(name)
         self.background = background #WSCNDmap
         self.background_model = None #FoVBGmodel
+        self._background_cached = None        
         self._response_background_cached = None
         self._background_parameters_cached = None
         self._background_parameters_cached_prev = None
@@ -102,8 +103,7 @@ class EventDataset(gammapy.datasets.Dataset):
         #self.events = observation.events
         self.obs = observation
         self._evaluators=None
-                
- 
+            
     def __str__(self):
         str_ = f"{self.__class__.__name__}\n"
         str_ += "-" * len(self.__class__.__name__) + "\n"
@@ -123,26 +123,20 @@ class EventDataset(gammapy.datasets.Dataset):
 
         # model section
         n_models, n_pars, n_free_pars = 0, 0, 0
-        if self.models is not None:
-            n_models = len(self.models)
-            n_pars = len(self.models.parameters)
-            n_free_pars = len(self.models.parameters.free_parameters)
+        if self._models is not None:
+            n_models = len(self._models)
+            n_pars = len(self._models.parameters)
+            n_free_pars = len(self._models.parameters.free_parameters)
 
         str_ += "\t{:32}: {} \n".format("Number of models", n_models)
         str_ += "\t{:32}: {}\n".format("Number of parameters", n_pars)
         str_ += "\t{:32}: {}\n\n".format("Number of free parameters", n_free_pars)
 
-        if self.models is not None:
-            str_ += "\t" + "\n\t".join(str(self.models).split("\n")[2:])
+        if self._models is not None:
+            str_ += "\t" + "\n\t".join(str(self._models).split("\n")[2:])
 
         return str_.expandtabs(tabsize=2)
-
-           
-    @property
-    def models(self):
-        """Models set on the dataset (`~gammapy.modeling.models.Models`)."""
-        return self._models
-    
+   
     @property
     def evaluators(self):
         """Model evaluators"""
@@ -185,19 +179,26 @@ class EventDataset(gammapy.datasets.Dataset):
         kwargs["mask_safe"] = Map.from_geom(geom, unit="", dtype=bool)
 
         return cls(**kwargs)
-     
+
+    @property
+    def models(self):
+        """Models set on the dataset (`~gammapy.modeling.models.Models`)."""
+        return self._models   
+
+    
     @models.setter
     def models(self, models):    
 
         """Set UnbinnedEvaluator(s)"""
         self._evaluators = {}
 
-        if self.models is not None:
-            models = DatasetModels(self.models)
+        if self._models is not None:
+            models = DatasetModels(models)
             models = models.select(datasets_names=self.name)
             
             irfs={'psf':self.obs.psf, 'edisp':self.obs.edisp, 'exposure':self.exposure}
             events = self.events.select_row_subset(self.mask_safe)
+            
             for model in models:
                 if not isinstance(model, FoVBackgroundModel):
                     evaluator = UnbinnedEvaluator(
@@ -208,6 +209,9 @@ class EventDataset(gammapy.datasets.Dataset):
                         acceptance = self.acceptance
                     )
                     self._evaluators[model.name] = evaluator
+        
+        self._models = models             
+                    
                         
     def stat_sum(self, response_only=False):
         """
@@ -236,7 +240,7 @@ class EventDataset(gammapy.datasets.Dataset):
         returns: interpolated bkg value for all events, sum of bkg counts
         """
         #self._background_parameters_changed needs be copied from the MapDataset implementation
-        if self._background_cache is not None and (self.background_model is not None or not self._background_parameters_changed):
+        if self._background_cached is not None and (self.background_model is not None or not self._background_parameters_changed):
             return self._response_bkg_cached
 
         # case of bkg and extra model
@@ -270,8 +274,9 @@ class EventDataset(gammapy.datasets.Dataset):
             return self._response_bkg_cached
     
         # case of no bkg at all
-        else: return (np.zeros(len(self.events.table)), 0)
-
+        else: 
+            if(self.obs.events != None): return (np.zeros(len(self.obs.events.table)), 0)
+            else: return (np.zeros(0),0)
 
     def _background_parameters_changed(self):
         values = self.background_model.parameters.value
@@ -336,7 +341,7 @@ class EventDataset(gammapy.datasets.Dataset):
         info["stat_type"] = self.stat_type
 
         stat_sum = np.nan
-        if self.models is not None:
+        if self._models is not None:
             stat_sum = self.stat_sum()
 
         info["stat_sum"] = float(stat_sum)
