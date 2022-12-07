@@ -1,9 +1,9 @@
 .. include:: ../../references.txt
 
-.. _pig-023:
+.. _pig-xxx:
 
 **********************************
-PIG 23 - Unbinned Dataset
+PIG xxx - Unbinned Dataset
 **********************************
 
 * Author: Giacomo D'Amico, Julia Djuvsland, Tim Unbehaun (in alphabetical order)
@@ -16,25 +16,52 @@ Abstract
 ========
 
 Our goal is to be able to perform an unbinned analysis using gammapy.
-To this end we like to propose to add new Dataset classes with a dedicated fit
-statistic and an EventList in addition to the features already implemented for the 
-other gammapy Datasets.
+To this end we like to propose to add a new EventDataset class with a dedicated fit
+statistic and an EventDatasetEvaluator to compute the differential model flux at each event's position.
 
 Motivation
 ==============
-Unbinned data analyses can provide several advantages compared to binned fits. Firstly, 
+Unbinned data analyses can provide several advantages compared to binned analyses. Firstly, 
 they can be useful when very narrow features of a spectrum are expected. Then an unbinned 
 fit can provide more information than a binned one, as the latter one can't be more precise 
 than the bin width. Admittedly, this advantage is small when narrow bins are chosen especially
 as the IRFs are binned.
-Secondly, using an unbinned data set can save computing time in case of sparsely populated spectra.
-While the computing time is dependent on the number of bins of the Dataset in the binned case, 
+Secondly, when performing time analyses the instruments response can be assumed to be perfect. 
+So all features of the light curve can be fully taken into account with the unbinned analysis.  
+Thirdly, using an unbinned data set can save computing time in case of low event numbers.
+While the computing time is dependent on the number of bins of the binned dataset, 
 it is dependent on the number of events in the unbinned case. Introducing unbinned versions of the 
-currently existing gammapy Datasets (as we propose here) therefore gives the user the freedom to 
+currently existing gammapy datasets (as we propose here) therefore gives the user the freedom to 
 choose the appropriate data structure according to their needs with the potential to save computing costs.
 
+Use cases
+==============
 
-Alternatives
+The EventDataset still contains all the reconstructed properties of the events (energy, position, time) and can therefore be used for
+
+* Narrow spectral analysis
+* Pulsar analysis
+* Flare detection
+* Time variablity
+* Energy-temporal analysis
+* ....
+
+Implementation
+==============
+EventDataset:
+* DL4 (Eventlist + projected IRFs)
+* We need a maker class
+* Models
+* unbinned likelihood (stat_sum)
+* Binned Dataset functionality: create, downsample (the IRFs), pad, plotting, .to and .from methods, ...
+* No need for slices
+
+EventDatasetEvaluator:
+* Takes: One model + IRFs + Events
+* Returns differential model flux at event's position, the total model flux inside the mask
+* Uses Event kernels for the integration grid which are computed (ideally) once and stored
+
+(Alternatives)
 ==============
 One conceivable alternative would be to extend the existing Datasets by an EventList.
 This has the disadvantage of increasing the size of the objects by information not needed
