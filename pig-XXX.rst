@@ -39,16 +39,23 @@ Use cases
 
 The EventDataset still contains all the reconstructed properties of the events (energy, position, time) and can therefore be used for
 
+**********************************
+**********************************
+
 * Narrow spectral analysis
 * Pulsar analysis
 * Flare detection
 * Time variablity
 * Energy-temporal analysis
-* ....
+* ..
 
 Implementation
 ==============
 EventDataset:
+
+**********************************
+**********************************
+
 * DL4 (Eventlist + projected IRFs)
 * We need a maker class
 * Models
@@ -57,6 +64,10 @@ EventDataset:
 * No need for slices
 
 EventDatasetEvaluator:
+
+**********************************
+**********************************
+
 * Takes: One model + IRFs + Events
 * Returns differential model flux at event's position, the total model flux inside the mask
 * Uses Event kernels for the integration grid which are computed (ideally) once and stored
