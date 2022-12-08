@@ -42,7 +42,7 @@ The EventDataset still contains all the reconstructed properties of the events (
 **********************************
 **********************************
 
-* Narrow spectral analysis
+* Spectral analysis with narrow features
 * Pulsar analysis
 * Flare detection
 * Time variablity
