@@ -1,51 +1,77 @@
 import numpy as np
-from gammapy.irf import EnergyDispersion2D
+from gammapy.irf import EnergyDispersion2D, EDispMap, EDispKernelMap
 
-def make_edisp_factors(edisp2d, events, energy_axis_true, pointing, model_pos):
-    """Get energy dispersion for a given event and true energy axis.
+def make_edisp_factors(edisp, geom, events, position=None, pointing=None):
+    """Calculate the energy dispersion factors for the events.
 
         Parameters
         ----------
-        edisp2d : `~gammapy.irf.EnergyDispersion2D`
-            Energy Dispersion from the observaton
+        edisp : The energy dispersion. Supported classes are:
+            `~gammapy.irf.EDsipMap` (prefered)
+            `~gammapy.irf.EDispKernelMap` (less precise)
+            `~gammapy.irf.EnergyDispersion2D` (needs position and pointing)
+        geom : `~gammapy.maps.WcsGeom`
+            The true geometry for the numeric integration
         events : `~gammapy.data.EventList`
-            EventList with the relevant events (from the observaton)
-        
-        energy_axis_true : `~gammapy.maps.MapAxis`
-            True energy axis on which the model will be evaluated
+            EventList with the relevant events
+        position : `~astropy.coordinates.SkyCoord`
+            Position (centre) of the model at which the EDisp is evaluated. 
+            Should be a single coordinate. If None the skycoords of the geom are used.
         pointing : `~astropy.coordinates.SkyCoord`
-            Pointing position of the observation. Should be a single coordinates.
-        model_pos : `~astropy.coordinates.SkyCoord`
-            Position (centre) of the model. Should be a single coordinates.
+            Pointing position of the observation. Should be a single coordinate.
+            It needs to be give in case of the EnergyDispersion2D        
 
         Returns
         -------
-        edisp : `~numpy.ndarray`
-            the energy dispersion kernel for the unbinned evaluator. The shape is (Nevents,Nebins) with dP/dE_reco, the probablity for each true energy bin to reconstruct at the event's energy.
+        edisp : `~astropy.units.quantity.Quantity`
+            The energy dispersion kernels for the events. 
+            The shape is (Nevents,Nebins,(lon,lat)) with dP/dE_reco, 
+            the differential probablity for each true energy bin 
+            to reconstruct at the event's energy.
         """
-    # use event offsets for larger models + good psf, true offset is closer to event offset
-    offsets = events.radec.separation(pointing)[:,None] 
-    # use model offset for small models or bad psf, true offset is closer to model offset
-    offset = model_pos.separation(pointing)
+    e_axis_true = geom.axes['energy_true']
+    if position is None:
+        # interpolate on the true coordinates of geom
+        coords = {'skycoord': geom.get_coord(sparse=True).skycoord.squeeze()[None,None,...]}
+        expand_outdim = True
+        coords['energy_true'] = e_axis_true.center[:,None,None]
+        coords['energy'] = events.energy[:,None,None,None] # event,e_true,lon,lat
+    else:
+        # interpolate on the position
+        coords = {'skycoord': position}
+        expand_outdim = False
+        coords['energy_true'] = e_axis_true.center
+        coords['energy'] = events.energy[:,None] # event,e_true
+        
+    if isinstance(edisp, EDispMap):
+        # projected but with migra axis
+        coords['migra'] = coords['energy']/coords['energy_true']
+        factors = edisp.edisp_map.interp_by_coord(coords, fill_value=0.)
+        factors = factors / coords['energy_true']
     
-    event_migra = events.energy[:,None]/energy_axis_true.center
-    
-    # interpolate the edisp to the true energy axis, possibly even model offset
-    mm,ee,oo = np.meshgrid(edisp2d.axes['migra'].center,
-                           energy_axis_true.center,
-                           edisp2d.axes['offset'].center)
-    dmigra = edisp2d.axes['migra'].bin_width[:,None]
-    data = edisp2d.evaluate(offset=oo, energy_true=ee, migra=mm, method='linear') 
-    edisp = EnergyDispersion2D(axes=[energy_axis_true,edisp2d.axes['migra'],edisp2d.axes['offset']],
-                               data=data, interp_kwargs = edisp2d.interp_kwargs)
-    edisp.normalize() # not sure if we want to normalize here, if we don't normalize all the interpolation could be done at once
-#     edisp.data *= dmigra.value # multiply with dmigra to get P
-    edisp.data /= energy_axis_true.center.value[:,None,None]
-    values = edisp.evaluate(offset=offset,energy_true=energy_axis_true.center, migra=event_migra, method='linear')
-    # cut by migra axis edges since we don't want extrapolation
-    m_min, m_max = edisp2d.axes['migra'].edges[[0,-1]]
-    mask = (event_migra < m_max) & (event_migra > m_min)
-    return values*mask
+    elif isinstance(edisp, EDispKernelMap):
+        # projected already with energy axis
+        ## TODO: Print warning that KernelMap is not precise
+        e_reco_bins = edisp.edisp_map.geom.axes['energy'].edges.diff()
+        if expand_outdim: e_reco_bins = e_reco_bins[:,None,None]
+        factors = edisp.edisp_map.interp_by_coord(coords, fill_value=0.)
+        factors = factors / e_reco_bins
+        
+    elif isinstance(edisp, EnergyDispersion2D):
+        coords['offset'] = coords['skycoord'].separation(pointing)
+        coords['migra'] = coords['energy']/coords['energy_true']
+        del coords['energy']
+        del coords['skycoord']
+        factors = edisp.evaluate(method='linear', **coords)
+        factors = factors / coords['energy_true']
+        m_min, m_max = edisp.axes['migra'].edges[[0,-1]]
+        mask = (coords['migra'] < m_max) & (coords['migra'] > m_min)
+        factors *= mask
+        
+    else:
+        raise ValueError("No valid edisp class. \
+Need one of the following: EdispMap, EdispKernelMap, EnergyDispersion2D")
+    return factors
 
 def make_exposure_factors(livetime, aeff, pointing, coords):
     """Get energy dispersion for a given event and true energy axis.
