@@ -27,10 +27,28 @@ class EventDatasetMaker(Maker):
     """
 
     tag = "EventDatasetMaker"
+    available_selection = ["exposure", "background", "psf", "edisp"]
 
- #   def __init__(
- #       self,
- #   ):
+    def __init__(
+            self,
+            selection=None,
+            safe_mask_maker=None,
+            **maker_kwargs,
+        ):
+         
+            if selection is None:
+                selection = self.available_selection
+
+            selection = set(selection)
+
+            if not selection.issubset(self.available_selection):
+                difference = selection.difference(self.available_selection)
+                raise ValueError(f"{difference} is not a valid method.")
+
+            self.selection = selection
+            self.map_ds_maker = MapDatasetMaker(selection=selection, **maker_kwargs)
+            self.safe_mask_maker = safe_mask_maker
+
        
     @staticmethod
     def make_meta_table(observation):
@@ -52,7 +70,7 @@ class EventDatasetMaker(Maker):
         return meta_table    
 
 
-    def run(self, emptyMapDs, obs, safeMaskMaker=None):
+    def run(self, emptyMapDs, obs):
         """Make the EventDataset.
 
         Parameters
@@ -61,9 +79,7 @@ class EventDatasetMaker(Maker):
                Empty MapDataset specifying the geometries for the IRFs
         obs : `~gammapy.data.Observation`
             Observation to build the EventDataset from 
-        safeMaskMaker : `~gammapy.makers.SafeMaskMaker`
-            SafeMaskMaker in case events should be excluded from the dataset
-            
+        
         Returns
         -------
         dataset : `~gammapy.datasets.EventDataset`
@@ -71,16 +87,15 @@ class EventDatasetMaker(Maker):
         """
         kwargs = {}
         kwargs["meta_table"] = self.make_meta_table(obs)
+        kwargs["events"] = obs.events
         
-        mapDsMaker = MapDatasetMaker(selection=("exposure", "psf", "edisp"))
-        dataset = mapDsMaker.run(emptyMapDs, obs)
+        dataset = self.map_ds_maker.run(emptyMapDs, obs)
         
-        if safeMaskMaker: dataset = safeMaskMaker.run(dataset, obs)
-
-        event_dataset = EventDataset(events=obs.events, exposure=dataset.exposure, edisp=dataset.edisp, psf=dataset.psf, mask_fit=dataset.mask)
+        if self.safe_mask_maker: 
+            dataset = self.safe_mask_maker.run(dataset, obs)
+            kwargs["mask_safe"] = dataset.mask_safe
         
-        kwargs["exposure"] = dataset.exposure
-        kwargs["psf"] = dataset.psf
-        kwargs["edisp"] = dataset.edisp
+        for key in self.selection:
+            kwargs[key] = getattr(dataset, key, None)
                           
-        return event_dataset.__class__(name=dataset.name, **kwargs)
+        return EventDataset(name=dataset.name, **kwargs)
