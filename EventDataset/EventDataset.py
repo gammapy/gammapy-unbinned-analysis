@@ -46,11 +46,17 @@ class EventDataset(gammapy.datasets.Dataset):
         Mask to apply to the likelihood for fitting.
     mask_safe : `~gammapy.maps.WcsNDMap` or `~gammapy.utils.fits.HDULocation`
         Mask defining the safe data range.
+    exposure : `~gammapy.maps.WcsNDMap` or `~gammapy.utils.fits.HDULocation`
+        Exposure cube   
+    psf : `~gammapy.irf.PSFMap` or `~gammapy.utils.fits.HDULocation`
+        PSF kernel
+    edisp : `~gammapy.irf.EDispMap` or `~gammapy.utils.fits.HDULocation`
+        Energy dispersion kernel    
     meta_table : `~astropy.table.Table`
         Table listing information on observations used to create the dataset.
         One line per observation for stacked datasets.
-    observation: `~gammapy.data.Observation` 
-         Observation containing the data (EventList) and IRFs
+    events: `~gammapy.data.EventList` 
+         EventList containing the recorded photons
     name : str
          Name of the returned dataset.
    
@@ -65,9 +71,15 @@ class EventDataset(gammapy.datasets.Dataset):
     background = LazyFitsData(cache=True)
     mask_fit = LazyFitsData(cache=True)
     mask_safe = LazyFitsData(cache=True)
+    exposure = LazyFitsData(cache=True)
+    edisp = LazyFitsData(cache=True)   
+    psf = LazyFitsData(cache=True)
     
     _lazy_data_members = [
         "background",
+        "exposure",
+        "edisp",
+        "psf",
         "mask_fit",
         "mask_safe",
     ]
@@ -76,12 +88,15 @@ class EventDataset(gammapy.datasets.Dataset):
         self,
         geom=None,
         models=None,
+        exposure=None,
+        psf=None,
+        edisp=None,
         background=None,
         mask_safe=None,
         mask_fit=None,
         meta_table=None,
-        observation=None,
         name=None,
+        events=None
     ): 
  
         self._name = make_name(name)
@@ -91,8 +106,9 @@ class EventDataset(gammapy.datasets.Dataset):
         self._response_background_cached = None
         self._background_parameters_cached = None
         self._background_parameters_cached_prev = None
-        
+        self.exposure = exposure     
         self.geom=geom
+        self.events = events       
         
         self.mask_fit = mask_fit
         self.mask_safe = mask_safe
@@ -100,8 +116,20 @@ class EventDataset(gammapy.datasets.Dataset):
         self._models = models
         self.meta_table = meta_table
         
-        #self.events = observation.events
-        self.obs = observation
+        if psf and not isinstance(psf, (PSFMap, HDULocation)):
+            raise ValueError(
+                f"'psf' must be a 'PSFMap' or `HDULocation` object, got {type(psf)}"
+            )
+
+        self.psf = psf
+
+#        if edisp and not isinstance(edisp, (EDispMap, EDispKernelMap, HDULocation)):
+#            raise ValueError(
+#                "'edisp' must be a 'EDispMap', `EDispKernelMap` or 'HDULocation' "
+#                f"object, got `{type(edisp)}` instead."
+#            )
+
+        self.edisp = edisp
         self._evaluators=None
             
     def __str__(self):
@@ -110,8 +138,11 @@ class EventDataset(gammapy.datasets.Dataset):
         str_ += "\n"
         str_ += "\t{:32}: {{name}} \n\n".format("Name")
         str_ += "\t{:32}: {{events}} \n".format("Event list")
-        #str_ += "\t{:32}: {{background:.2f}}\n".format("Total background counts")
 
+        #str_ += "\t{:32}: {{exposure_min:.2e}}\n".format("Exposure min")
+        #str_ += "\t{:32}: {{exposure_max:.2e}}\n\n".format("Exposure max")
+        
+       
         # likelihood section
         str_ += "\t{:32}: {{stat_type}}\n".format("Fit statistic type")
         str_ += "\t{:32}: {{stat_sum:.2f}}\n\n".format(
@@ -136,7 +167,31 @@ class EventDataset(gammapy.datasets.Dataset):
             str_ += "\t" + "\n\t".join(str(self._models).split("\n")[2:])
 
         return str_.expandtabs(tabsize=2)
-   
+
+    @property
+    def geoms(self):
+        """Map geometries
+
+        Returns
+        -------
+        geoms : dict
+            Dict of map geometries involved in the dataset.
+        """
+        geoms = {}
+
+        geoms["geom"] = self._geom
+
+        if self.exposure:
+            geoms["geom_exposure"] = self.exposure.geom
+
+        if self.psf:
+            geoms["geom_psf"] = self.psf.psf_map.geom
+
+        if self.edisp:
+            geoms["geom_edisp"] = self.edisp.edisp_map.geom
+
+        return geoms    
+    
     @property
     def evaluators(self):
         """Model evaluators"""
@@ -149,7 +204,7 @@ class EventDataset(gammapy.datasets.Dataset):
     def create(
         cls,
         geom,
-        observation=None,
+        events=None,
         name=None,
         meta_table=None,
         **kwargs,
@@ -196,7 +251,7 @@ class EventDataset(gammapy.datasets.Dataset):
             models = DatasetModels(models)
             models = models.select(datasets_names=self.name)
             
-            irfs={'psf':self.obs.psf, 'edisp':self.obs.edisp, 'exposure':self.exposure}
+            irfs={'psf':self.psf, 'edisp':self.edisp, 'exposure':self.exposure}
             events = self.events.select_row_subset(self.mask_safe)
             
             for model in models:
@@ -205,7 +260,7 @@ class EventDataset(gammapy.datasets.Dataset):
                         model=model,
                         irfs=irfs,
                         events=events,
-                        pointing=self.obs.pointing_radec,
+                        #pointing=self.obs.pointing_radec,
                         acceptance = self.acceptance
                     )
                     self._evaluators[model.name] = evaluator
@@ -275,7 +330,7 @@ class EventDataset(gammapy.datasets.Dataset):
     
         # case of no bkg at all
         else: 
-            if(self.obs.events != None): return (np.zeros(len(self.obs.events.table)), 0)
+            if(self.events != None): return (np.zeros(len(self.events.table)), 0)
             else: return (np.zeros(0),0)
 
     def _background_parameters_changed(self):
@@ -329,12 +384,10 @@ class EventDataset(gammapy.datasets.Dataset):
         info["name"] = self.name
 
         ontime = u.Quantity(np.nan, "s")
-        if self.obs:
-            if self.obs.gti: ontime = self.obs.gti.time_sum
-            if self.obs.events: 
-                energies = self.obs.events.energy
-                info["events"] = unit_array_to_string(energies)
-            else: info["events"] = None
+        if self.events:
+            energies = self.events.energy
+            info["events"] = unit_array_to_string(energies)
+        else: info["events"] = None
         info["events"] = None
         info["ontime"] = ontime
 
