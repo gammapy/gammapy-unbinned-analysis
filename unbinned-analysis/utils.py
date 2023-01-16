@@ -9,7 +9,7 @@ def make_edisp_factors(edisp, geom, events, position=None, pointing=None):
         edisp : The energy dispersion. Supported classes are:
             `~gammapy.irf.EDsipMap` (prefered)
             `~gammapy.irf.EDispKernelMap` (less precise)
-            `~gammapy.irf.EnergyDispersion2D` (needs position and pointing)
+            `~gammapy.irf.EnergyDispersion2D` (not yet projected, needs pointing)
         geom : `~gammapy.maps.WcsGeom`
             The true geometry for the numeric integration
         events : `~gammapy.data.EventList`
@@ -71,6 +71,66 @@ def make_edisp_factors(edisp, geom, events, position=None, pointing=None):
     else:
         raise ValueError("No valid edisp class. \
 Need one of the following: EdispMap, EdispKernelMap, EnergyDispersion2D")
+    return factors
+
+def make_psf_factors(psf, geom, events, position=None, pointing=None):
+    """Calculate the energy dispersion factors for the events.
+
+        Parameters
+        ----------
+        psf : The Point Spead Function. Supported classes are:
+            `~gammapy.irf.PSFMap` (projected)
+            `~gammapy.irf.PSF3D` (not yet projected, needs pointing)
+        geom : `~gammapy.maps.WcsGeom`
+            The true geometry for the numeric integration
+        events : `~gammapy.data.EventList`
+            EventList with the relevant events
+        position : `~astropy.coordinates.SkyCoord`
+            Position (centre) of the model at which the psf is evaluated. 
+            Should be a single coordinate. If None the skycoords of the geom are used.
+        pointing : `~astropy.coordinates.SkyCoord`
+            Pointing position of the observation. Should be a single coordinate.
+            It needs to be give in case of the EnergyDispersion2D        
+
+        Returns
+        -------
+        psf : `~astropy.units.quantity.Quantity`
+            The PSF kernels for the events. 
+            The shape is (Nevents,Nebins,lon,lat) with dP/dOmega, 
+            the differential probablity for each true pixel 
+            to reconstruct at the event's position.
+        """
+   
+    e_axis_true = geom.axes['energy_true']
+    geom_radec = geom.get_coord(sparse=True).skycoord.squeeze()
+    rad = events.radec[:,None,None,None].separation(geom_radec)
+    
+    coords = {'skycoord': position or geom_radec[None,None,...]}
+    coords['rad'] = rad # event,e_true,lon,lat 
+    
+    if isinstance(psf, PSFMap):
+        if 'energy' in psf.psf_map.geom.axes_names:
+            coords['energy'] = events.energy[:,None,None,None]
+        if 'energy_true' in psf.psf_map.geom.axes_names:
+            coords['energy_true'] = e_axis_true.center[:,None,None]
+
+        factors = psf.psf_map.interp_by_coord(coords, fill_value=0.)
+        unit=psf.psf_map.unit  # for some reason the interpolated values have no units
+        factors *= unit
+            
+    elif isinstance(psf, PSF3D):
+        if 'energy' in psf.axes.names:
+            coords['energy'] = events.energy[:,None,None,None]
+        if 'energy_true' in psf.axes.names:
+            coords['energy_true'] = e_axis_true.center[:,None,None]
+
+        coords['offset'] = coords['skycoord'].separation(pointing)
+        del coords['skycoord']
+        factors = psf.evaluate(method='linear', **coords)
+        
+    else:
+        raise ValueError("No valid psf class. \
+Need one of the following: PSFMap, PSF3D")
     return factors
 
 def make_exposure_factors(livetime, aeff, pointing, coords):
