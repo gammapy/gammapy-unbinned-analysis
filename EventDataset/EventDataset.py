@@ -123,11 +123,11 @@ class EventDataset(gammapy.datasets.Dataset):
 
         self.psf = psf
 
-#        if edisp and not isinstance(edisp, (EDispMap, EDispKernelMap, HDULocation)):
-#            raise ValueError(
-#                "'edisp' must be a 'EDispMap', `EDispKernelMap` or 'HDULocation' "
-#                f"object, got `{type(edisp)}` instead."
-#            )
+        if edisp and not isinstance(edisp, (EDispMap, EDispKernelMap, HDULocation)):
+            raise ValueError(
+                "'edisp' must be a 'EDispMap', `EDispKernelMap` or 'HDULocation' "
+                f"object, got `{type(edisp)}` instead."
+            )
 
         self.edisp = edisp
         self._evaluators=None

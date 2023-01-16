@@ -76,10 +76,8 @@ class EventDatasetMaker(Maker):
         dataset = mapDsMaker.run(emptyMapDs, obs)
         
         if safeMaskMaker: dataset = safeMaskMaker.run(dataset, obs)
-        
-        print(dataset.exposure)
-        
-        event_dataset = EventDataset(obs.events, dataset.exposure, dataset.edisp, dataset.psf, dataset.mask)
+
+        event_dataset = EventDataset(events=obs.events, exposure=dataset.exposure, edisp=dataset.edisp, psf=dataset.psf, mask_fit=dataset.mask)
         
         kwargs["exposure"] = dataset.exposure
         kwargs["psf"] = dataset.psf
