@@ -53,9 +53,11 @@ def make_edisp_factors(edisp, geom, events, position=None, pointing=None):
         # projected already with energy axis
         ## TODO: Print warning that KernelMap is not precise
         e_reco_bins = edisp.edisp_map.geom.axes['energy'].edges.diff()
-        if expand_outdim: e_reco_bins = e_reco_bins[:,None,None]
+        edisp = edisp.copy() # so we don't change the original data 
+        edisp.edisp_map.quantity = edisp.edisp_map.quantity/ e_reco_bins[:,None,None]
         factors = edisp.edisp_map.interp_by_coord(coords, fill_value=0.)
-        factors = factors / e_reco_bins
+        unit = edisp.edisp_map.unit  # for some reason the interpolated values have no units
+        factors *= unit
         
     elif isinstance(edisp, EnergyDispersion2D):
         coords['offset'] = coords['skycoord'].separation(pointing)
@@ -64,6 +66,7 @@ def make_edisp_factors(edisp, geom, events, position=None, pointing=None):
         del coords['skycoord']
         factors = edisp.evaluate(method='linear', **coords)
         factors = factors / coords['energy_true']
+        # do a cut on migra min/max to avoid extrapolation on this axis
         m_min, m_max = edisp.axes['migra'].edges[[0,-1]]
         mask = (coords['migra'] < m_max) & (coords['migra'] > m_min)
         factors *= mask
