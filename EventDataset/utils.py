@@ -1,5 +1,6 @@
 import numpy as np
-from gammapy.irf import EnergyDispersion2D, EDispMap, EDispKernelMap
+from gammapy.irf import EnergyDispersion2D, EDispMap, EDispKernelMap, EDispKernel, PSFMap, PSF3D, PSFKernel 
+from gammapy.maps import Map
 
 def make_edisp_factors(edisp, geom, events, position=None, pointing=None):
     """Calculate the energy dispersion factors for the events.
@@ -203,7 +204,7 @@ def make_acceptance(geom, mask, edisp, psf, model_pos,
     geom_model_mask = geom.to_image().to_cube([e_reco])
     
     ## the PSF needs a larger map for evaluation
-    if isinstance(psf, PSFMap) or isinstance(psf, PSF3D):
+    if isinstance(psf, (PSFMap, PSF3D)):
         width_geom = geom.width.max()
         if max_radius is None:
             kwargs = {

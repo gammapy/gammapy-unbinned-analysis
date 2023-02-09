@@ -14,6 +14,7 @@ from gammapy.utils.fits import HDULocation, LazyFitsData
 from gammapy.irf import EDispKernelMap, EDispMap, PSFKernel, PSFMap
 import gammapy.makers.utils 
 from gammapy.data import GTI
+from UnbinnedEvaluator import UnbinnedEvaluator
 
 PSF_CONTAINMENT = 0.999
 CUTOUT_MARGIN = 0.1 * u.deg
@@ -101,9 +102,7 @@ class EventDataset(gammapy.datasets.Dataset):
  
         self._name = make_name(name)
         self.background = background #WSCNDmap
-        self.background_model = None #FoVBGmodel
-        self._background_cached = None        
-        self._response_background_cached = None
+        self._response_bkg_cached = None
         self._background_parameters_cached = None
         self._background_parameters_cached_prev = None
         self.exposure = exposure     
@@ -168,6 +167,17 @@ class EventDataset(gammapy.datasets.Dataset):
 
         return str_.expandtabs(tabsize=2)
 
+    
+    @property
+    def event_mask(self):
+        """Entry for each event whether it is inside the mask or not"""
+        coords = self.events.map_coord(self.mask.geom)
+        return self.mask.get_by_coord(coords)==1
+    
+    @property
+    def events_in_mask(self):
+        return self.events.select_row_subset(self.event_mask)
+                
     @property
     def geoms(self):
         """Map geometries
@@ -247,47 +257,81 @@ class EventDataset(gammapy.datasets.Dataset):
         """Set UnbinnedEvaluator(s)"""
         self._evaluators = {}
 
-        if self._models is not None:
+        if models is not None:
             models = DatasetModels(models)
             models = models.select(datasets_names=self.name)
             
-            irfs={'psf':self.psf, 'edisp':self.edisp, 'exposure':self.exposure}
-            events = self.events.select_row_subset(self.mask_safe)
-            
             for model in models:
                 if not isinstance(model, FoVBackgroundModel):
-                    evaluator = UnbinnedEvaluator(
-                        model=model,
-                        irfs=irfs,
-                        events=events,
-                        #pointing=self.obs.pointing_radec,
-                        acceptance = self.acceptance
-                    )
+                    evaluator = UnbinnedEvaluator(model=model)
                     self._evaluators[model.name] = evaluator
         
         self._models = models             
                     
-                        
-    def stat_sum(self, response_only=False):
+    @property
+    def background_model(self):
+        try:
+            return self.models[f"{self.name}-bkg"]
+        except (ValueError, TypeError):
+            pass
+        
+    def stat_sum(self):
         """
         compute the unbinned TS value
         """
-        response, npred_sum = self.response_background() # start with the bkg (all events)
-        # add the models
-        for ev in self._evaluators.values():
-            npred, mask, s = ev.compute_response()
-            response[mask] += npred
-            npred_sum += s
-        
-        if response_only:
-            return np.log(response)
+        response_bkg, bkg_sum = self.response_background() # start with the bkg (all events)
+        response_signal, sig_sum = self.response_signal()
+        response = response_bkg + response_signal
+        total = bkg_sum + sig_sum
         if np.all(response>0): 
             # valid response - no event has npred <= 0
-            logL = np.sum(np.log(response)) - npred_sum
+            logL = np.sum(np.log(response)) - total
             return -2 * logL
         else:
             # invalid response, reject the model
             return np.inf
+        
+    def response_signal(self, model_name=None):
+        """Model predicted signal counts (differential) at the events coordinates.
+        If a model name is passed, predicted counts from that component are returned.
+        Else, the total signal counts are returned.
+
+        Parameters
+        ----------
+        model_name: str
+            Name of  SkyModel for which to compute the npred for.
+            If none, the sum of all components (minus the background model)
+            is returned
+
+        Returns
+        -------
+        response_sig, sum_sig: array, float
+            array with the differential predicted counts and the total number of predicted counts inside the mask"""
+        
+        response = np.zeros(len(self.events_in_mask.table))
+        total = 0.0
+        
+        evaluators = self.evaluators
+        if model_name is not None:
+            evaluators = {model_name: self.evaluators[model_name]}
+
+        for evaluator in evaluators.values():
+            if evaluator.needs_update:
+                evaluator.update(
+                    self.events_in_mask,
+                    self.exposure,
+                    self.psf,
+                    self.edisp,
+                    self.mask,
+                    use_modelpos=True
+                )
+
+            if evaluator.contributes:
+                r,s = evaluator.compute_npred()
+                response[evaluator.event_mask] += r
+                total += s
+
+        return response, total
 
     def response_background(self):
         """
@@ -295,7 +339,7 @@ class EventDataset(gammapy.datasets.Dataset):
         returns: interpolated bkg value for all events, sum of bkg counts
         """
         #self._background_parameters_changed needs be copied from the MapDataset implementation
-        if self._background_cached is not None and (self.background_model is not None or not self._background_parameters_changed):
+        if self._response_bkg_cached is not None and (self.background_model is None or not self._background_parameters_changed):
             return self._response_bkg_cached
 
         # case of bkg and extra model
@@ -305,12 +349,11 @@ class EventDataset(gammapy.datasets.Dataset):
                 self._response_bkg_cached[1] *= self.bkg_renorm()
                 return self._response_bkg_cached
             elif self._background_parameters_changed:
-                values = self.background_model.evaluate_geom(geom=background.geom)
+                values = self.background_model.evaluate_geom(geom=self.background.geom)
                 bkg_map = self.background * values
                 # interpolate and sum the bkg values
-                bkg_sum = bkg_map.data[self.ds.mask_safe.data].sum()
-                events = self.events.select_row_subset(self.mask_safe)
-                coords = events.map_coord(background.geom)
+                bkg_sum = bkg_map.data[self.mask].sum()
+                coords = self.events_in_mask.map_coord(self.background.geom)
                 # we need to interpolate the differential bkg npred
                 bkg_map.quantity /= bkg_map.geom.bin_volume()
                 self._response_bkg_cached = bkg_map.interp_by_coord(coords, method='linear'), bkg_sum
@@ -318,11 +361,10 @@ class EventDataset(gammapy.datasets.Dataset):
     
         # case of bkg but no extra model        
         elif self.background:
-            bkg_map = self.background
+            bkg_map = self.background.copy()
             # interpolate and sum the bkg values
-            bkg_sum = bkg_map.data[self.ds.mask_safe.data].sum()
-            events = self.events.select_row_subset(self.mask_safe)
-            coords = events.map_coord(background.geom)
+            bkg_sum = bkg_map.data[self.mask].sum()
+            coords = self.events_in_mask.map_coord(self.background.geom)
             # we need to interpolate the differential bkg npred
             bkg_map.quantity /= bkg_map.geom.bin_volume()
             self._response_bkg_cached = bkg_map.interp_by_coord(coords, method='linear'), bkg_sum
@@ -330,7 +372,8 @@ class EventDataset(gammapy.datasets.Dataset):
     
         # case of no bkg at all
         else: 
-            if(self.events != None): return (np.zeros(len(self.events.table)), 0)
+            if self.events_in_mask is not None: 
+                return (np.zeros(len(self.events_in_mask.table)), 0.0)
             else: return (np.zeros(0),0)
 
     def _background_parameters_changed(self):
@@ -345,7 +388,7 @@ class EventDataset(gammapy.datasets.Dataset):
     def _background_parameter_norm_only_changed(self):
         """Only norm parameter changed"""
         norm_only_changed = False
-        idx = self._bkg_norm_idx()
+        idx = self._bkg_norm_idx
     
         values = self.background_model.parameters.value
         if idx and self._background_parameters_cached is not None:
@@ -370,6 +413,7 @@ class EventDataset(gammapy.datasets.Dataset):
             idx = idx[0]
         else:
             idx = None
+        return idx
 
             
     def info_dict(self):
