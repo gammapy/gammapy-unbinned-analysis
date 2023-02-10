@@ -212,6 +212,8 @@ class UnbinnedEvaluator:
             # init the proper integration geometry
             self._init_geom(exposure)
             self.exposure = exposure.interp_to_geom(self.geom)
+            ### rely on float32 precision
+            self.exposure.data = self.exposure.data.astype(np.float32)
             if use_modelpos == True:
                 position = self.model.position
             else: position=None
@@ -234,9 +236,10 @@ class UnbinnedEvaluator:
             if len(self.geom.data_shape)+1 != len(edisp_factors.shape):
                 if not isinstance(edisp_factors, float):
                     edisp_factors = np.expand_dims(edisp_factors, axis=(-1,-2))
-            # maybe float32 is enough precision here?
             # maybe use sparse matrix
             self.irf_cube = psf_factors * edisp_factors
+            ### rely on float32 precision
+            self.irf_cube = self.irf_cube.astype(np.float32)
             
             if mask is not None:
                 self.acceptance = make_acceptance(self.geom, mask, edisp, psf, self.model.position)
@@ -273,10 +276,12 @@ class UnbinnedEvaluator:
         else:
             if not self.parameter_norm_only_changed:
                 npred=self.model.integrate_geom(self.geom, self.gti) 
+                ### rely on float32 precision
+                npred.data = npred.data.astype(np.float32)
                 npred *= self.exposure.quantity
                 response = self.irf_cube * npred
                 total = npred * self.acceptance.data
-                axis_idx = np.arange(len(response.shape))
+                axis_idx = np.arange(len(response.shape)) # the indices to sum over
                 axis_idx=np.delete(axis_idx, 0) # dim 0 needs to be the event axis
                 response = response.to_value(self.irf_unit).sum(axis=tuple(axis_idx))
                 total = total.quantity.to_value('').sum() 
