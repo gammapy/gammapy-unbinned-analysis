@@ -195,6 +195,7 @@ class UnbinnedEvaluator:
         log.debug("Updating model evaluator")
         self.events = events
         self.mask = mask
+        self.irf_unit = u.Unit('')
         self._cached_position = self.model.position_lonlat
         if self.evaluation_mode == "local":
             self.contributes = self.model.contributes(mask=mask, margin=self.psf_width)
