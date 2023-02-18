@@ -104,7 +104,6 @@ class EventDataset(gammapy.datasets.Dataset):
         self.background = background #WSCNDmap
         self._response_bkg_cached = None
         self._background_parameters_cached = None
-        self._background_parameters_cached_prev = None
         self.exposure = exposure     
         self.geom=geom
         self.events = events       
@@ -340,6 +339,7 @@ class EventDataset(gammapy.datasets.Dataset):
         """
         #self._background_parameters_changed needs be copied from the MapDataset implementation
         if self._response_bkg_cached is not None and (self.background_model is None or not self._background_parameters_changed):
+#             print('using bkg cache')
             return self._response_bkg_cached
 
         # case of bkg and extra model
@@ -347,8 +347,10 @@ class EventDataset(gammapy.datasets.Dataset):
             if self._background_parameter_norm_only_changed:
                 self._response_bkg_cached[0] *= self.bkg_renorm()
                 self._response_bkg_cached[1] *= self.bkg_renorm()
+#                 print('simply renorming bkg')
+                self._background_parameters_cached = self.background_model.parameters.value
                 return self._response_bkg_cached
-            elif self._background_parameters_changed:
+            elif self._background_parameters_changed or self._response_bkg_cached is None:
                 values = self.background_model.evaluate_geom(geom=self.background.geom)
                 bkg_map = self.background * values
                 # interpolate and sum the bkg values
@@ -356,7 +358,9 @@ class EventDataset(gammapy.datasets.Dataset):
                 coords = self.events_in_mask.map_coord(self.background.geom)
                 # we need to interpolate the differential bkg npred
                 bkg_map.quantity /= bkg_map.geom.bin_volume()
-                self._response_bkg_cached = bkg_map.interp_by_coord(coords, method='linear'), bkg_sum
+                self._response_bkg_cached = [bkg_map.interp_by_coord(coords, method='linear'), bkg_sum]
+#                 print('full calculation of bkg')
+                self._background_parameters_cached = self.background_model.parameters.value
                 return self._response_bkg_cached
     
         # case of bkg but no extra model        
@@ -367,7 +371,8 @@ class EventDataset(gammapy.datasets.Dataset):
             coords = self.events_in_mask.map_coord(self.background.geom)
             # we need to interpolate the differential bkg npred
             bkg_map.quantity /= bkg_map.geom.bin_volume()
-            self._response_bkg_cached = bkg_map.interp_by_coord(coords, method='linear'), bkg_sum
+            self._response_bkg_cached = [bkg_map.interp_by_coord(coords, method='linear'), bkg_sum]
+#             print('interpolating because of no bkg model')
             return self._response_bkg_cached
     
         # case of no bkg at all
@@ -376,12 +381,11 @@ class EventDataset(gammapy.datasets.Dataset):
                 return (np.zeros(len(self.events_in_mask.table)), 0.0)
             else: return (np.zeros(0),0)
 
+    @property
     def _background_parameters_changed(self):
         values = self.background_model.parameters.value
         # TODO: possibly allow for a tolerance here?
         changed = ~np.all(self._background_parameters_cached == values)
-        if changed:
-            self._background_parameters_cached = values
         return changed
 
     @property
@@ -391,17 +395,15 @@ class EventDataset(gammapy.datasets.Dataset):
         idx = self._bkg_norm_idx
     
         values = self.background_model.parameters.value
-        if idx and self._background_parameters_cached is not None:
-            changed = self._background_parameters_cached_previous == values
+        if idx is not None and self._background_parameters_cached is not None:
+            changed = self._background_parameters_cached != values
             norm_only_changed = sum(changed) == 1 and changed[idx]
 
-        if not norm_only_changed:
-            self._background_parameters_cached_previous = values
         return norm_only_changed
 
     def bkg_renorm(self):
         value = self.background_model.parameters.value[self._bkg_norm_idx]
-        value_cached = self._background_parameters_cached_previous[self._bkg_norm_idx]
+        value_cached = self._background_parameters_cached[self._bkg_norm_idx]
         return value / value_cached
 
     @property

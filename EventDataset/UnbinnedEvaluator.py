@@ -286,13 +286,13 @@ class UnbinnedEvaluator:
                 axis_idx=np.delete(axis_idx, 0) # dim 0 needs to be the event axis
                 response = response.to_value(self.irf_unit).sum(axis=tuple(axis_idx))
                 total = total.quantity.to_value('').sum() 
-                self._computation_cache = response, total
+                self._computation_cache = [response, total]
             else:
                 response, total = self._computation_cache
                 response *= self.renorm()
                 total *= self.renorm()
-                self._computation_cache = response, total
-        return response, total
+                self._computation_cache = [response, total]
+        return [response, total]
 
     @property
     def apply_psf_after_edisp(self):
@@ -331,7 +331,7 @@ class UnbinnedEvaluator:
         norm_only_changed = False
         idx = self._norm_idx
         values = self.model.parameters.value
-        if idx and self._computation_cache is not None:
+        if idx is not None and self._computation_cache is not None:
             changed = self._cached_parameter_values_previous == values
             norm_only_changed = sum(changed) == 1 and changed[idx]
 
