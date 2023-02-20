@@ -286,13 +286,13 @@ class UnbinnedEvaluator:
                 response = response.to_value(self.irf_unit).sum(axis=tuple(axis_idx))
                 total = total.quantity.to_value('').sum() 
                 self._computation_cache = [response, total]
-                self._cached_parameter_values = values
+                self._cached_parameter_values = self.model.parameters.value
             else:
                 response, total = self._computation_cache
                 response *= self.renorm()
                 total *= self.renorm()
                 self._computation_cache = [response, total]
-                self._cached_parameter_values = values
+                self._cached_parameter_values = self.model.parameters.value
         return [response, total]
 
     @property
@@ -329,7 +329,7 @@ class UnbinnedEvaluator:
         idx = self._norm_idx
         values = self.model.parameters.value
         if idx is not None and self._computation_cache is not None:
-            changed = self._cached_parameter_values_previous != values
+            changed = self._cached_parameter_values != values
             norm_only_changed = np.count_nonzero(changed) == 1 and changed[idx]
         return norm_only_changed
 
