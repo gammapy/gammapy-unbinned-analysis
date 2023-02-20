@@ -90,7 +90,6 @@ class UnbinnedEvaluator:
 
         # define cached computations
         self._cached_parameter_values = None
-        self._cached_parameter_values_previous = None
         self._cached_parameter_values_spatial = None
         self._cached_position = (0, 0)
         self._computation_cache = None
@@ -287,11 +286,13 @@ class UnbinnedEvaluator:
                 response = response.to_value(self.irf_unit).sum(axis=tuple(axis_idx))
                 total = total.quantity.to_value('').sum() 
                 self._computation_cache = [response, total]
+                self._cached_parameter_values = values
             else:
                 response, total = self._computation_cache
                 response *= self.renorm()
                 total *= self.renorm()
                 self._computation_cache = [response, total]
+                self._cached_parameter_values = values
         return [response, total]
 
     @property
@@ -319,10 +320,6 @@ class UnbinnedEvaluator:
 
         # TODO: possibly allow for a tolerance here?
         changed = ~np.all(self._cached_parameter_values == values)
-
-        if changed:
-            self._cached_parameter_values = values
-
         return changed
 
     @property
@@ -332,11 +329,8 @@ class UnbinnedEvaluator:
         idx = self._norm_idx
         values = self.model.parameters.value
         if idx is not None and self._computation_cache is not None:
-            changed = self._cached_parameter_values_previous == values
-            norm_only_changed = sum(changed) == 1 and changed[idx]
-
-        if not norm_only_changed:
-            self._cached_parameter_values_previous = values
+            changed = self._cached_parameter_values_previous != values
+            norm_only_changed = np.count_nonzero(changed) == 1 and changed[idx]
         return norm_only_changed
 
     def parameters_spatial_changed(self, reset=True):
@@ -389,8 +383,8 @@ class UnbinnedEvaluator:
 
     def renorm(self):
         value = self.model.parameters.value[self._norm_idx]
-        if self._cached_parameter_values_previous is None:
+        if self._cached_parameter_values is None:
             return 1.0
         else:
-            value_cached = self._cached_parameter_values_previous[self._norm_idx]
+            value_cached = self._cached_parameter_values[self._norm_idx]
             return value / value_cached
