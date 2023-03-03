@@ -15,6 +15,7 @@ from gammapy.irf import EDispKernelMap, EDispMap, PSFKernel, PSFMap
 import gammapy.makers.utils 
 from gammapy.data import GTI
 from UnbinnedEvaluator import UnbinnedEvaluator
+from gammapy.stats.fit_statistics_cython import TRUNCATION_VALUE
 
 PSF_CONTAINMENT = 0.999
 CUTOUT_MARGIN = 0.1 * u.deg
@@ -282,13 +283,10 @@ class EventDataset(gammapy.datasets.Dataset):
         response_signal, sig_sum = self.response_signal()
         response = response_bkg + response_signal
         total = bkg_sum + sig_sum
-        if np.all(response>0): 
-            # valid response - no event has npred <= 0
-            logL = np.sum(np.log(response)) - total
-            return -2 * logL
-        else:
-            # invalid response, reject the model
-            return np.inf
+        response = np.where(response <= TRUNCATION_VALUE, TRUNCATION_VALUE, response)
+        
+        logL = np.sum(np.log(response)) - total
+        return -2 * logL
         
     def response_signal(self, model_name=None):
         """Model predicted signal counts (differential) at the events coordinates.
@@ -344,7 +342,7 @@ class EventDataset(gammapy.datasets.Dataset):
 
         # case of bkg and extra model
         if self.background_model and self.background:
-            if self._background_parameter_norm_only_changed:
+            if self._background_parameter_norm_only_changed and self._response_bkg_cached is not None:
                 self._response_bkg_cached[0] *= self.bkg_renorm()
                 self._response_bkg_cached[1] *= self.bkg_renorm()
 #                 print('simply renorming bkg')
