@@ -247,7 +247,6 @@ class UnbinnedEvaluator:
             
         self.reset_cache_properties()
         self._computation_cache = None
-        self._cached_parameter_previous = None
     
     @lazyproperty
     def event_mask(self):
@@ -328,7 +327,11 @@ class UnbinnedEvaluator:
         norm_only_changed = False
         idx = self._norm_idx
         values = self.model.parameters.value
+        
         if idx is not None and self._computation_cache is not None:
+            if self._cached_parameter_values[idx] == 0:
+                # then the cache can't be used
+                return False
             changed = self._cached_parameter_values != values
             norm_only_changed = np.count_nonzero(changed) == 1 and changed[idx]
         return norm_only_changed
@@ -366,8 +369,8 @@ class UnbinnedEvaluator:
         separation = angular_separation(lon, lat, lon_cached, lat_cached)
         changed = separation > CUTOUT_MARGIN.to_value(u.rad)
 
-        if changed:
-            self._cached_position = lon, lat
+#         if changed:
+#             self._cached_position = lon, lat
 
         return changed
 

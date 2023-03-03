@@ -394,6 +394,9 @@ class EventDataset(gammapy.datasets.Dataset):
     
         values = self.background_model.parameters.value
         if idx is not None and self._background_parameters_cached is not None:
+            if self._background_parameters_cached[idx] == 0:
+                # then the cache can't be used
+                return False
             changed = self._background_parameters_cached != values
             norm_only_changed = np.count_nonzero(changed) == 1 and changed[idx]
 
