@@ -307,6 +307,10 @@ class UnbinnedEvaluator:
         npred : `~gammapy.maps.Map`
             Predicted counts on the map (in reco energy bins)
         """
+        if self.model.parameters.value[self._norm_idx] == 0:
+            # just return 0, don't update cache or cached parameters
+            return [np.zeros(self.irf_cube.shape[0]), 0.0]
+
         if self.parameters_changed or not self.use_cache:
             del self._compute_npred
 
@@ -329,7 +333,7 @@ class UnbinnedEvaluator:
         values = self.model.parameters.value
         
         if idx is not None and self._computation_cache is not None:
-            if self._cached_parameter_values[idx] == 0:
+            if self._cached_parameter_values[idx] == 0 or not self.use_cache:
                 # then the cache can't be used
                 return False
             changed = self._cached_parameter_values != values

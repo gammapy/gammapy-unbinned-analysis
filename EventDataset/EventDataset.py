@@ -342,7 +342,10 @@ class EventDataset(gammapy.datasets.Dataset):
 
         # case of bkg and extra model
         if self.background_model and self.background:
-            if self._background_parameter_norm_only_changed and self._response_bkg_cached is not None:
+            if self.background_model.parameters.value[self._bkg_norm_idx] == 0:
+                # just return 0, don't update cache or cached parameters
+                return (np.zeros(len(self.events_in_mask.table)), 0.0)
+            elif self._background_parameter_norm_only_changed and self._response_bkg_cached is not None:
                 self._response_bkg_cached[0] *= self.bkg_renorm()
                 self._response_bkg_cached[1] *= self.bkg_renorm()
 #                 print('simply renorming bkg')
