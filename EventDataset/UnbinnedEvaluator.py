@@ -57,7 +57,8 @@ class UnbinnedEvaluator:
         evaluation_mode="local",
         use_cache=True,
         energy_axis=None,
-        spatialbs=None
+        spatialbs=None,
+        dtype=np.float32
     ):
 
         self.model = model
@@ -74,6 +75,7 @@ class UnbinnedEvaluator:
         self.geom = None
         self.irf_cube = None
         self._psf_width = 0.0 * u.deg
+        self.dtype=dtype
         
         if evaluation_mode not in {"local", "global"}:
             raise ValueError(f"Invalid evaluation_mode: {evaluation_mode!r}")
@@ -213,13 +215,13 @@ class UnbinnedEvaluator:
             self._init_geom(exposure)
             self.exposure = exposure.interp_to_geom(self.geom)
             ### rely on float32 precision
-            self.exposure.data = self.exposure.data.astype(np.float32)
+            self.exposure.data = self.exposure.data.astype(self.dtype)
             if use_modelpos == True:
                 position = self.model.position
             else: position=None
             # get the edisp kernel factors for each event
             if edisp is not None:
-                edisp_factors = make_edisp_factors(edisp, self.geom, events, position=position)
+                edisp_factors = make_edisp_factors(edisp, self.geom, events, position=position, dtype=self.dtype)
                 self.irf_unit /= u.TeV
             else:
                 edisp_factors = 1.0
@@ -228,21 +230,19 @@ class UnbinnedEvaluator:
             if psf is not None and self.model.spatial_model:
                 # TODO: Set a width according to a containment
                 self._psf_width = psf.psf_map.geom.axes['rad'].edges.max() 
-                psf_factors = make_psf_factors(psf, self.geom, events, position=position)
+                self.irf_cube = make_psf_factors(psf, self.geom, events, position=position, dtype=self.dtype)
                 self.irf_unit /= u.sr
             else:
-                psf_factors = 1.0
+                self.irf_cube = 1.0
 
             if len(self.geom.data_shape)+1 != len(edisp_factors.shape):
                 if not isinstance(edisp_factors, float):
                     edisp_factors = np.expand_dims(edisp_factors, axis=(-1,-2))
             # maybe use sparse matrix
-            self.irf_cube = psf_factors * edisp_factors
-            ### rely on float32 precision
-            self.irf_cube = self.irf_cube.astype(np.float32)
+            self.irf_cube *= edisp_factors
             
             if mask is not None:
-                self.acceptance = make_acceptance(self.geom, mask, edisp, psf, self.model.position)
+                self.acceptance = make_acceptance(self.geom, mask, edisp, psf, self.model.position, dtype=self.dtype)
             else: self.acceptance = 1.0
             
         self.reset_cache_properties()
@@ -275,15 +275,14 @@ class UnbinnedEvaluator:
         else:
             if not self.parameter_norm_only_changed:
                 npred=self.model.integrate_geom(self.geom, self.gti) 
-                ### rely on float32 precision
-                npred.data = npred.data.astype(np.float32)
+                npred.data = npred.data.astype(self.dtype)
                 npred *= self.exposure.quantity
-                response = self.irf_cube * npred
                 total = npred * self.acceptance.data
+                total = total.quantity.to_value('').sum() 
+                response = self.irf_cube * npred
                 axis_idx = np.arange(len(response.shape)) # the indices to sum over
                 axis_idx=np.delete(axis_idx, 0) # dim 0 needs to be the event axis
                 response = response.to_value(self.irf_unit).sum(axis=tuple(axis_idx))
-                total = total.quantity.to_value('').sum() 
                 self._computation_cache = [response, total]
                 self._cached_parameter_values = self.model.parameters.value
             else:
@@ -309,7 +308,7 @@ class UnbinnedEvaluator:
         """
         if self.model.parameters.value[self._norm_idx] == 0:
             # just return 0, don't update cache or cached parameters
-            return [np.zeros(self.irf_cube.shape[0]), 0.0]
+            return [np.zeros(self.irf_cube.shape[0], dtype=self.dtype), 0.0]
 
         if self.parameters_changed or not self.use_cache:
             del self._compute_npred

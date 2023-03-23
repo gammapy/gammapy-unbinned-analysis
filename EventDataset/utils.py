@@ -1,8 +1,9 @@
 import numpy as np
 from gammapy.irf import EnergyDispersion2D, EDispMap, EDispKernelMap, EDispKernel, PSFMap, PSF3D, PSFKernel 
 from gammapy.maps import Map
+from astropy.nddata import block_reduce
 
-def make_edisp_factors(edisp, geom, events, position=None, pointing=None):
+def make_edisp_factors(edisp, geom, events, position=None, pointing=None, dtype=np.float64):
     """Calculate the energy dispersion factors for the events.
 
         Parameters
@@ -75,9 +76,9 @@ def make_edisp_factors(edisp, geom, events, position=None, pointing=None):
     else:
         raise ValueError("No valid edisp class. \
 Need one of the following: EdispMap, EdispKernelMap, EnergyDispersion2D")
-    return factors
+    return factors.astype(dtype)
 
-def make_psf_factors(psf, geom, events, position=None, pointing=None):
+def make_psf_factors(psf, geom, events, position=None, pointing=None, dtype=np.float64, factor=4):
     """Calculate the energy dispersion factors for the events.
 
         Parameters
@@ -106,36 +107,44 @@ def make_psf_factors(psf, geom, events, position=None, pointing=None):
         """
    
     e_axis_true = geom.axes['energy_true']
+    geom = geom.upsample(factor)
     geom_radec = geom.get_coord(sparse=True).skycoord.squeeze()
-    rad = events.radec[:,None,None,None].separation(geom_radec)
-    
+    block_size = (1,) * (1+len(geom.axes)) + (factor, factor)
     coords = {'skycoord': position or geom_radec[None,None,...]}
-    coords['rad'] = rad # event,e_true,lon,lat 
-    
-    if isinstance(psf, PSFMap):
-        if 'energy' in psf.psf_map.geom.axes_names:
-            coords['energy'] = events.energy[:,None,None,None]
-        if 'energy_true' in psf.psf_map.geom.axes_names:
-            coords['energy_true'] = e_axis_true.center[:,None,None]
+    ### split the events to lower peak memory
+    splits=np.linspace(0,events.radec.shape[0],factor**2+1,dtype=int)[1:-1]
+    event_radec_list = np.split(events.radec, splits)
+    factor_list=[]
+    for event_radec in event_radec_list:
+        coords['rad'] = event_radec[:,None,None,None].separation(geom_radec) 
+        # shape of (event,e_true,lon,lat) 
 
-        factors = psf.psf_map.interp_by_coord(coords, fill_value=0.)
-        unit=psf.psf_map.unit  # for some reason the interpolated values have no units
-        factors *= unit
-            
-    elif isinstance(psf, PSF3D):
-        if 'energy' in psf.axes.names:
-            coords['energy'] = events.energy[:,None,None,None]
-        if 'energy_true' in psf.axes.names:
-            coords['energy_true'] = e_axis_true.center[:,None,None]
+        if isinstance(psf, PSFMap):
+            if 'energy' in psf.psf_map.geom.axes_names:
+                coords['energy'] = events.energy[:,None,None,None]
+            if 'energy_true' in psf.psf_map.geom.axes_names:
+                coords['energy_true'] = e_axis_true.center[:,None,None]
 
-        coords['offset'] = coords['skycoord'].separation(pointing)
-        del coords['skycoord']
-        factors = psf.evaluate(method='linear', **coords)
-        
-    else:
-        raise ValueError("No valid psf class. \
-Need one of the following: PSFMap, PSF3D")
-    return factors
+            factors = psf.psf_map.interp_by_coord(coords, fill_value=0.)
+            unit=psf.psf_map.unit  # for some reason the interpolated values have no units
+
+        elif isinstance(psf, PSF3D):
+            if 'energy' in psf.axes.names:
+                coords['energy'] = events.energy[:,None,None,None]
+            if 'energy_true' in psf.axes.names:
+                coords['energy_true'] = e_axis_true.center[:,None,None]
+            if 'offset' not in coords.keys():
+                coords['offset'] = coords['skycoord'].separation(pointing)
+                del coords['skycoord']
+            factors = psf.evaluate(method='linear', **coords)
+            unit=factors.unit
+            factors = factors.value
+
+        else:
+            raise ValueError("No valid psf class. \
+    Need one of the following: PSFMap, PSF3D")
+        factor_list.append(block_reduce(factors, tuple(block_size), func=np.nanmean))
+    return np.vstack(factor_list).astype(dtype)*unit
 
 def make_exposure_factors(livetime, aeff, pointing, coords):
     """Get energy dispersion for a given event and true energy axis.
@@ -161,7 +170,7 @@ def make_exposure_factors(livetime, aeff, pointing, coords):
     return (exposure * livetime).to("m2 s")
 
 def make_acceptance(geom, mask, edisp, psf, model_pos, 
-                    pointing=None, max_radius=None, containment=0.999, factor=4):
+                    pointing=None, max_radius=None, containment=0.999, factor=4, dtype=np.float64):
     """Compute the acceptance cube with dimensions of `geom`. 
     The cube can be multiplied to the model which is integrated on `geom` 
     and the sum over the result will give the total number of model counts inside 
@@ -303,4 +312,5 @@ def make_acceptance(geom, mask, edisp, psf, model_pos,
     if psf_kernel:
         acceptance=acceptance.convolve(psf_kernel)
         acceptance=acceptance.cutout(geom.center_skydir, width_geom)
+    acceptance.data = acceptance.data.astype(dtype)
     return acceptance
