@@ -78,7 +78,7 @@ def make_edisp_factors(edisp, geom, events, position=None, pointing=None, dtype=
 Need one of the following: EdispMap, EdispKernelMap, EnergyDispersion2D")
     return factors.astype(dtype)
 
-def make_psf_factors(psf, geom, events, position=None, pointing=None, dtype=np.float64, factor=4):
+def make_psf_factors(psf, geom, events, position=None, pointing=None, dtype=np.float64, factor=4, min_split=10):
     """Calculate the energy dispersion factors for the events.
 
         Parameters
@@ -95,7 +95,12 @@ def make_psf_factors(psf, geom, events, position=None, pointing=None, dtype=np.f
             Should be a single coordinate. If None the skycoords of the geom are used.
         pointing : `~astropy.coordinates.SkyCoord`
             Pointing position of the observation. Should be a single coordinate.
-            It needs to be give in case of the EnergyDispersion2D        
+            It needs to be give in case of the EnergyDispersion2D 
+        dtype : data type of the output array
+        factor : int
+            oversampling factor to compute the PSF
+        min_split: int
+            minimum number of events for the splitting
 
         Returns
         -------
@@ -112,12 +117,17 @@ def make_psf_factors(psf, geom, events, position=None, pointing=None, dtype=np.f
     block_size = (1,) * (1+len(geom.axes)) + (factor, factor)
     coords = {'skycoord': position or geom_radec[None,None,...]}
     ### split the events to lower peak memory
+    n_events = len(events.table)
+    n_split = min(factor**2+1, int(n_events/min_split))
     splits=np.linspace(0,events.radec.shape[0],factor**2+1,dtype=int)[1:-1]
     event_radec_list = np.split(events.radec, splits)
     factor_list=[]
     for event_radec in event_radec_list:
-        coords['rad'] = event_radec[:,None,None,None].separation(geom_radec) 
-        # shape of (event,e_true,lon,lat) 
+        # to avoid errors in block_reduce:
+        if len(event_radec)==0:
+            continue
+        coords['rad'] = event_radec[:,None,None,None].separation(geom_radec)
+        # shape of (event,e_true,lon,lat)
 
         if isinstance(psf, PSFMap):
             if 'energy' in psf.psf_map.geom.axes_names:
