@@ -136,12 +136,16 @@ class EventDataset(gammapy.datasets.Dataset):
         str_ += "-" * len(self.__class__.__name__) + "\n"
         str_ += "\n"
         str_ += "\t{:32}: {{name}} \n\n".format("Name")
-        str_ += "\t{:32}: {{events}} \n".format("Event list")
-
-        #str_ += "\t{:32}: {{exposure_min:.2e}}\n".format("Exposure min")
-        #str_ += "\t{:32}: {{exposure_max:.2e}}\n\n".format("Exposure max")
         
-       
+        str_ += "\t{:32}: {{events}} \n".format("Events in EventList")      
+        str_ += "\t{:32}: {{signal:.2f}}\n".format("Predicted excess counts")
+        str_ += "\t{:32}: {{background:.2f}}\n\n".format(
+            "Predicted background counts"
+        )
+
+        str_ += "\t{:32}: {{exposure_min:.2e}}\n".format("Exposure min")
+        str_ += "\t{:32}: {{exposure_max:.2e}}\n\n".format("Exposure max")
+             
         # likelihood section
         str_ += "\t{:32}: {{stat_type}}\n".format("Fit statistic type")
         str_ += "\t{:32}: {{stat_sum:.2f}}\n\n".format(
@@ -433,20 +437,46 @@ class EventDataset(gammapy.datasets.Dataset):
         info = {}
         info["name"] = self.name
 
-        ontime = u.Quantity(np.nan, "s")
-        if self.events:
-            energies = self.events.energy
-            info["events"] = unit_array_to_string(energies)
+        
+        signal, background = np.nan, np.nan
+        
+        if self.events: 
+             if(self.mask):
+                    signal = self.response_signal()[1]
+                    background = self.response_background()[1]
+             info["events"] = len(self.events.table)
         else: info["events"] = None
-        info["events"] = None
-        info["ontime"] = ontime
 
+        info["signal"]=float(signal)
+        info["background"]=float(background)
+             
+        exposure_min = np.nan * u.Unit("cm s")
+        exposure_max = np.nan * u.Unit("cm s")
+        livetime = np.nan * u.s
+
+        if self.exposure is not None:
+            mask_exposure = self.exposure.data > 0
+
+            if self.mask_safe is not None:
+                mask_spatial = self.mask_safe.reduce_over_axes(func=np.logical_or).data
+                mask_exposure = mask_exposure & mask_spatial[np.newaxis, :, :]
+
+            if not mask_exposure.any():
+                mask_exposure = slice(None)
+
+            exposure_min = np.min(self.exposure.quantity[mask_exposure])
+            exposure_max = np.max(self.exposure.quantity[mask_exposure])
+            livetime = self.exposure.meta.get("livetime", np.nan * u.s).copy()
+
+        info["exposure_min"] = exposure_min.item()
+        info["exposure_max"] = exposure_max.item()
+        info["livetime"] = livetime
+        
         info["stat_type"] = self.stat_type
-
+        
         stat_sum = np.nan
-        if self._models is not None:
+        if self.events is not None and self._models is not None and self.mask is not None:
             stat_sum = self.stat_sum()
-
         info["stat_sum"] = float(stat_sum)
-
+   
         return info
