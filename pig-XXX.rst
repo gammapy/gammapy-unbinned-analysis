@@ -50,6 +50,32 @@ The EventDataset still contains all the reconstructed properties of the events (
 * Energy-temporal analysis
 * ..
 
+
+Class requirements 
+==================
+* Individual event information (position, energy, time); therefore the ``EventList`` seems to be a good choice
+* IRF information (should support time dependence) 
+      Open question: Do we want projected IRFs?
+      + Could use existing classes
+      + Memory consumption is under control
+      - Would require binning
+      - Implementation of time dependence is not straightforward
+      - Information loss due to interpolations
+      In case we use projected IRFs we should only support the ``EDispMap`` and ``PSFMap`` and not the "kernel" version of those for simplicity and precision.
+      Alternatives: 
+      1 Event-wise IRFs: Interpolate unprojected IRFs to the event coordinates
+        + Processing for the UnbinnedEvaluator would be fast
+        + No information loss 
+        - Classes would need to be implemented
+        - Might be too memory intensive esp. in cases of many events that are close to each other (who could use the same binned IRF)
+      2 Unprojected IRFs: Information of the observation
+        + No information loss
+        + Classes exist
+        + Fast to build the Dataset
+        - Slow to build the kernels for each event
+        - Cannot inherit from MapDataset (might complicate stacking)
+        
+
 Implementation
 ==============
 EventDataset:
