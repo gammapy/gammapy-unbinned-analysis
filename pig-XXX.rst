@@ -58,11 +58,11 @@ Class requirements
   General requirement: Memory usage of the IRFs should not be too big, e.g. we only want to store the IRFs at the resolution of the instrument. Also, building of the kernel should be fast for many events and fine integration grids. 
   Open question: Do we want projected IRFs?
   Pros/Cons: 
-      * "+" Could use existing classes
-      * "+" Memory consumption is under control
-      * "-" Would require binning
-      * "-" Implementation of time dependence is not straightforward
-      * "-" Information loss due to interpolations
+     * "+" Could use existing classes
+     * "+" Memory consumption is under control
+     * "-" Would require binning
+     * "-" Implementation of time dependence is not straightforward
+     * "-" Information loss due to interpolations
         
   In case we use projected IRFs we should only support the ``EDispMap`` and ``PSFMap`` and not the "kernel" version of those for simplicity and precision
   
