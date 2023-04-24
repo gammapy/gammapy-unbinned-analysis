@@ -55,26 +55,51 @@ Class requirements
 ==================
 * Individual event information (position, energy, time); therefore the ``EventList`` seems to be a good choice
 * IRF information (should support time dependence) 
-      Open question: Do we want projected IRFs?
-      + Could use existing classes
-      + Memory consumption is under control
-      - Would require binning
-      - Implementation of time dependence is not straightforward
-      - Information loss due to interpolations
+  General requirement: Memory usage of the IRFs should not be too big, e.g. we only want to store the IRFs at the resolution of the instrument. Also, building of the kernel should be fast for many events and fine integration grids. 
+  Open question: Do we want projected IRFs?
+  Pros/Cons: 
+        + Could use existing classes
+        + Memory consumption is under control
+        - Would require binning
+        - Implementation of time dependence is not straightforward
+        - Information loss due to interpolations
       In case we use projected IRFs we should only support the ``EDispMap`` and ``PSFMap`` and not the "kernel" version of those for simplicity and precision.
-      Alternatives: 
-      1 Event-wise IRFs: Interpolate unprojected IRFs to the event coordinates
+     
+ Alternatives: 
+ 1. Event-wise IRFs: Interpolate unprojected IRFs to the event coordinates
         + Processing for the UnbinnedEvaluator would be fast
         + No information loss 
         - Classes would need to be implemented
         - Might be too memory intensive esp. in cases of many events that are close to each other (who could use the same binned IRF)
-      2 Unprojected IRFs: Information of the observation
+ 2. Unprojected IRFs: Information of the observation
         + No information loss
         + Classes exist
         + Fast to build the Dataset
         - Slow to build the kernels for each event
         - Cannot inherit from MapDataset (might complicate stacking)
-        
+* Want to store and evaluate models using an UnbinnedEvaluator. 
+* Which "convenience fucntions" similar to the ``MapDataset``: 
+  ** copy: Can be inherited?
+  ** create: Modification needed wrt ``MapDataset``
+  ** cutout: Modification needed wrt ``MapDataset``
+  ** downsample: Only meaningful in case we use projected IRFs; then modifications needed
+  ** fake: Yes, but use EventSampler
+  ** I/O operations: Yes, if we support stacking
+  ** from_geoms: Only meaningful in case we use projected IRFs)
+  ** npred (npred_*): Need to return a list with event response and summed number of events in FoV.
+  ** pad: not needed 
+  ** residuals/visualisation: Want to have "on the fly" binning of the events and inherit the functions
+  ** resample_energyAxis: Can be inherited
+  ** slice_by_energy: Needs slight modifications
+  ** slice_by_index: Could be done based on the binning of the mask
+  ** stack: Makes sense in case of many observations under similar IRFs with few events (e.g. high energy).
+            Note: Stacking is not expected to increase the speed of the analysis. Thus it mostly makes sense if you want to serialise. 
+  ** stat_array + stat_sum: Modification needed wrt ``MapDataset``
+  ** to_image: only for visualisation
+  ** to_masked: Modification needed wrt ``MapDataset`` and would require stack to be implemented. 
+  ** to_region_map_dataset/ to_spectrum_dataset: Want to have links to binned datasets as well as 1D datasets. 
+  All in all, many methods are useful but need adaptation. Need to discuss how to avoid code duplication while maintaining transparency. 
+  
 
 Implementation
 ==============
