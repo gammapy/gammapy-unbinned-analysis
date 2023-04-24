@@ -58,7 +58,6 @@ Class requirements
   General requirement: Memory usage of the IRFs should not be too big, e.g. we only want to store the IRFs at the resolution of the instrument. Also, building of the kernel should be fast for many events and fine integration grids. 
   Open question: Do we want projected IRFs?
   Pros/Cons: 
-  
         * "+" Could use existing classes
         * "+" Memory consumption is under control
         * "-" Would require binning
