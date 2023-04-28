@@ -72,7 +72,7 @@ Class requirements
        * "+" Processing for the UnbinnedEvaluator would be fast
        * "+" No information loss 
        * "-" Classes would need to be implemented
-       * "-" Might be too memory intensive esp. in cases of many events that are close to each other (who could use the same binned IRF)
+       * "-" Might be too memory intensive esp. in cases of many events that are close to each other (that could use the same binned IRF)
         
   2. Unprojected IRFs: Information of the observation
        * "+" No information loss
@@ -89,16 +89,16 @@ Class requirements
   * cutout: Modification needed wrt ``MapDataset``
   * downsample: Only meaningful in case we use projected IRFs; then modifications needed
   * fake: Yes, but use EventSampler
-  * I/O operations: Yes, if we support stacking
+  * I/O operations: Yes, if we support stacking and projected IRFs. If the production of the datasets is fast writing only makes sense for the models which can be done separately
   * from_geoms: Only meaningful in case we use projected IRFs)
-  * npred (npred_*): Need to return a list with event response and summed number of events in FoV.
+  * npred (npred_*): Need to return a list with event response (npred at event's coordinates) and integrated npred inside the mask. Right now this is simply an array/quantity. A masks allows mapping to the whole event list as the model is only evaluated for contributing events. One might also think about returning a ``MapCoord`` with the response as a coordinate but right now I don't really see the advantage compared to a simple array.
   * pad: not needed 
   * residuals/visualisation: Want to have "on the fly" binning of the events and inherit the functions
-  * resample_energyAxis: Can be inherited
-  * slice_by_energy: Needs slight modifications
+  * resample_energyAxis: Can be inherited. Mostly relevant for the mask as we don't use reco binning otherwise.
+  * slice_by_energy: Needs slight modifications. We could slice the mask and group the events according to the slices. Or build a new mask based on the slices. Maybe usefull for the computation of flux points.
   * slice_by_index: Could be done based on the binning of the mask
   * stack: Makes sense in case of many observations under similar IRFs with few events (e.g. high energy). Note: Stacking is not expected to increase the speed of the analysis. Thus it mostly makes sense if you want to serialise. 
-  * stat_array + stat_sum: Modification needed wrt ``MapDataset``
+  * stat_array + stat_sum: Modification needed wrt ``MapDataset``. Use the unbinned likelihood (see below). ``stat_array`` might not make sense because of the 0-dimensional Npred term.
   * to_image: only for visualisation
   * to_masked: Modification needed wrt ``MapDataset`` and would require stack to be implemented. 
   * to_region_map_dataset/ to_spectrum_dataset: Want to have links to binned datasets as well as 1D datasets. 
@@ -106,7 +106,7 @@ Class requirements
   All in all, many methods are useful but need adaptation. Need to discuss how to avoid code duplication while maintaining transparency. 
   
 
-Implementation
+(Current) Implementation
 ==============
 EventDataset:
 
@@ -114,7 +114,7 @@ EventDataset:
 **********************************
 
 * DL4 (Eventlist + projected IRFs)
-* We need a maker class
+* We need a maker class (which basically uses the ``MapDatasetMaker`` + adding the Eventlist instead of building the counts cube)
 * Models
 * unbinned likelihood (stat_sum)
 `$-2 \\log \\mathcal{L} =  2 N_{pred} - 2 \\sum_{i} \\log \\phi( E_i, \\vec{r}_i )$`
@@ -141,7 +141,7 @@ the binned version.
 
 Status
 ======
-We are working on it :)
+We have a repository where a first protoype can be found: https://github.com/gammapy/gammapy-unbinned-analysis/
 
 
 Outlook
