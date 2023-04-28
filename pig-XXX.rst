@@ -58,11 +58,11 @@ Class requirements
   General requirement: Memory usage of the IRFs should not be too big, e.g. we only want to store the IRFs at the resolution of the instrument. Also, building of the kernel should be fast for many events and fine integration grids. 
   Open question: Do we want projected IRFs?
   Pros/Cons: 
-   * "+" Could use existing classes
-   * "+" Memory consumption is under control
-   * "-" Would require binning
-   * "-" Implementation of time dependence is not straightforward
-   * "-" Information loss due to interpolations
+  * "+" Could use existing classes
+  * "+" Memory consumption is under control
+  * "-" Would require binning
+  * "-" Implementation of time dependence is not straightforward
+  * "-" Information loss due to interpolations
         
   In case we use projected IRFs we should only support the ``EDispMap`` and ``PSFMap`` and not the "kernel" version of those for simplicity and precision
   
@@ -141,7 +141,7 @@ the binned version.
 
 Status
 ======
-We have a repository where a first protoype can be found: https://github.com/gammapy/gammapy-unbinned-analysis/
+We implemented a first prototype of the EventDataset class (which does not inherit from the ``MapDataset``) including a maker (EventDatasetMaker) and evaluator (UnbinnedEvaluator) class. The code can be found here: https://github.com/gammapy/gammapy-unbinned-analysis/tree/main/EventDataset.
 
 
 Outlook
