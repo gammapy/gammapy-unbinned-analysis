@@ -117,7 +117,7 @@ EventDataset:  Inherits from gammapy.Datasets.Dataset
 * DL4: ``EventList`` + projected IRFs (``PSFMap``, ``EDispMap``) + exposure and background map
 * We need a maker class (which basically uses the ``MapDatasetMaker`` + adding the Eventlist instead of building the counts cube)
 * Models: ``SkyModel`` for the background, ``FoVBackgroundModel`` 
-* unbinned likelihood (stat_sum): `$-2 \\log \\mathcal{L} =  2 N_{pred} - 2 \\sum_{i} \\log \\phi( E_i, \\vec{r}_i )$` Returns [``numpy.array``, float].
+* unbinned likelihood (stat_sum): `$-2 \\log \\mathcal{L} =  2 N_{pred} - 2 \\sum_{i} \\log \\phi( E_i, \\vec{r}_i )$` 
 * Binned Dataset functionality: create, downsample (the IRFs), pad, plotting, .to and .from methods, ...
 * No need for slices
 * Mask in reconstructed coordinates ``WcsNDMap``
@@ -128,7 +128,7 @@ EventDatasetEvaluator:
 **********************************
 
 * Takes: One model + IRFs + Events
-* Returns differential model flux at event's position, the total model flux inside the mask
+* Returns differential model flux at event's position, the total model flux inside the mask. Returns [``numpy.array``, float] where the array shape corresonds to (N_event,) and N_event is the number of events contributing to that model.
 * Uses Event kernels for the integration grid which are computed (ideally) once and stored
 
 (Alternatives)
