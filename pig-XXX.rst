@@ -59,7 +59,7 @@ Class requirements
   Open question: Do we want projected IRFs?
   Pros/Cons: 
   
-  * "+ Could use existing classes
+  * "+" Could use existing classes
   * "+" Memory consumption is under control
   * "-" Would require binning
   * "-" Implementation of time dependence is not straightforward
