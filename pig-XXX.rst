@@ -109,19 +109,18 @@ Class requirements
 
 (Current) Implementation
 ==============
-EventDataset:
+EventDataset:  Inherits from gammapy.Datasets.Dataset 
 
 **********************************
 **********************************
 
-* DL4 (Eventlist + projected IRFs)
+* DL4: ``EventList`` + projected IRFs (``PSFMap``, ``EDispMap``) + exposure and background map
 * We need a maker class (which basically uses the ``MapDatasetMaker`` + adding the Eventlist instead of building the counts cube)
-* Models
-* unbinned likelihood (stat_sum)
-`$-2 \\log \\mathcal{L} =  2 N_{pred} - 2 \\sum_{i} \\log \\phi( E_i, \\vec{r}_i )$`
-
+* Models: ``SkyModel`` for the background, ``FoVBackgroundModel`` 
+* unbinned likelihood (stat_sum): `$-2 \\log \\mathcal{L} =  2 N_{pred} - 2 \\sum_{i} \\log \\phi( E_i, \\vec{r}_i )$` Returns [``numpy.array``, float].
 * Binned Dataset functionality: create, downsample (the IRFs), pad, plotting, .to and .from methods, ...
 * No need for slices
+* Mask in reconstructed coordinates ``WcsNDMap``
 
 EventDatasetEvaluator:
 
@@ -144,6 +143,12 @@ Status
 ======
 We implemented a first prototype of the EventDataset class (which does not inherit from the ``MapDataset``) including a maker (EventDatasetMaker) and evaluator (UnbinnedEvaluator) class. The code can be found here: https://github.com/gammapy/gammapy-unbinned-analysis/tree/main/EventDataset.
 
+
+Things that would need implementing:
+* Time-dependent evaluator
+* 1-D evaluator
+* Unit tests
+* Benchmarks
 
 Outlook
 =======
