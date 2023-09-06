@@ -3,8 +3,9 @@ import numpy as np
 import astropy.units as u
 from astropy.coordinates.angle_utilities import angular_separation
 from astropy.utils import lazyproperty
-from regions import CircleSkyRegion
-from gammapy.modeling.models import PointSpatialModel, TemplateNPredModel
+from regions import CircleSkyRegion, PointSkyRegion
+from gammapy.modeling.models import PointSpatialModel, TemplateNPredModel, SkyModel
+from gammapy.maps import RegionGeom
 from utils import *
 # import warnings
 
@@ -106,34 +107,44 @@ class UnbinnedEvaluator:
     def reset_cache_properties(self):
         """Reset cached properties."""
         del self._compute_npred
+        
+    @property
+    def cutout_margin(self):
+        if self.position_fixed:
+            return 0 *u.deg
+        else:
+            return CUTOUT_MARGIN
 
     # just use the exposure geometry because of edisp problems otherwise.
     def _init_geom(self, exposure):
         """True energy map geometry (`~gammapy.maps.Geom`) on which the model will be integrated"""
+        if self.is_pointsource and self.position_fixed:
+            geom = RegionGeom(PointSkyRegion(self.model.position), axes=exposure.geom.axes)
         
-        geom = exposure.geom
-        
-        # cutout if neccessary
-        if self.evaluation_mode == "local":
-            self.contributes = self.model.contributes(mask=self.mask, margin=self.psf_width)
-            if self.contributes:
-                radius = self.model.evaluation_radius
-                if radius is not None:
-                    geom=geom.cutout(self.model.position, (radius+CUTOUT_MARGIN)*2)
-        
-        # adjust the spatial binsize if neccessary
-        res_scale = self.spatialbs or self.model.evaluation_bin_size_min
-#         res_scale = self.spatialbs if self.spatialbs is not None else self.model.evaluation_bin_size_min # avoids AstropyDeprecationWarning
-        if res_scale is not None:
-            pixel_size=np.max(geom.pixel_scales)
-            if pixel_size > res_scale:
-                geom = geom.upsample(int(np.ceil(pixel_size/res_scale)))
-            elif pixel_size < res_scale/2:
-                geom = geom.downsample(int(np.floor(res_scale/pixel_size)))
-        
-        # adjust the energy axis if given
-        if self.energy_axis is not None:
-            geom = geom.to_image().to_cube([self.energy_axis])
+        else:
+            geom = exposure.geom
+
+            # cutout if neccessary
+            if self.evaluation_mode == "local":
+                self.contributes = self.model.contributes(mask=self.mask, margin=self.psf_width)
+                if self.contributes:
+                    radius = self.model.evaluation_radius
+                    if radius is not None:
+                        geom=geom.cutout(self.model.position, (radius+self.cutout_margin)*2)
+
+            # adjust the spatial binsize if neccessary
+            res_scale = self.spatialbs or self.model.evaluation_bin_size_min
+    #         res_scale = self.spatialbs if self.spatialbs is not None else self.model.evaluation_bin_size_min # avoids AstropyDeprecationWarning
+            if res_scale is not None:
+                pixel_size=np.max(geom.pixel_scales)
+                if pixel_size > res_scale:
+                    geom = geom.upsample(int(np.ceil(pixel_size/res_scale)))
+                elif pixel_size < res_scale/2:
+                    geom = geom.downsample(int(np.floor(res_scale/pixel_size)))
+
+            # adjust the energy axis if given
+            if self.energy_axis is not None:
+                geom = geom.to_image().to_cube([self.energy_axis])
         self.geom = geom
 
     @property
@@ -158,7 +169,11 @@ class UnbinnedEvaluator:
     @property
     def psf_width(self):
         """Width of the PSF"""
-        return self._psf_width
+        try:
+            e=self.exposure.geom.axes['energy_true'].center[0]
+            return self.psf.containment_radius(0.99, e, self.model.position)
+        except:
+            return 1*u.deg
 
     def use_psf_containment(self, geom):
         """Use psf containment for point sources and circular regions"""
@@ -172,7 +187,7 @@ class UnbinnedEvaluator:
     @property
     def cutout_width(self):
         """Cutout width for the model component"""
-        return self.psf_width + 2 * (self.model.evaluation_radius + CUTOUT_MARGIN)
+        return self.psf_width + 2 * (self.model.evaluation_radius + self.cutout_margin)
 
     def update(self, events, exposure, psf=None, edisp=None, mask=None, use_modelpos=False):
         """Update the integration geometry, the kernel cube and the acceptance cube of the EventEvaluator, 
@@ -216,7 +231,7 @@ class UnbinnedEvaluator:
             self.exposure = exposure.interp_to_geom(self.geom)
             ### rely on float32 precision
             self.exposure.data = self.exposure.data.astype(self.dtype)
-            if use_modelpos == True:
+            if use_modelpos == True or isinstance(self.geom, RegionGeom):
                 position = self.model.position
             else: position=None
             # get the edisp kernel factors for each event
@@ -229,8 +244,12 @@ class UnbinnedEvaluator:
             # get the psf kernel factors for each event
             if psf is not None and self.model.spatial_model:
                 # TODO: Set a width according to a containment
-                self._psf_width = psf.psf_map.geom.axes['rad'].edges.max() 
-                self.irf_cube = make_psf_factors(psf, self.geom, events, position=position, dtype=self.dtype)
+                self._psf_width = psf.psf_map.geom.axes['rad'].edges.max()
+                if isinstance(self.geom, RegionGeom):
+                    psf_os_factor = 1 # important because of the downsampling in the end of make_psf_factors
+                else:
+                    psf_os_factor = 1
+                self.irf_cube = make_psf_factors(psf, self.geom, events, position=position, dtype=self.dtype, factor=psf_os_factor)
                 self.irf_unit /= u.sr
             else:
                 self.irf_cube = 1.0
@@ -242,7 +261,7 @@ class UnbinnedEvaluator:
             self.irf_cube *= edisp_factors
             
             if mask is not None:
-                self.acceptance = make_acceptance(self.geom, mask, edisp, psf, self.model.position, dtype=self.dtype)
+                self.acceptance = make_acceptance(self.geom, mask, edisp, psf, self.model.position, dtype=self.dtype, factor=4)
             else: self.acceptance = 1.0
             
         self.reset_cache_properties()
@@ -274,11 +293,14 @@ class UnbinnedEvaluator:
             
         else:
             if not self.parameter_norm_only_changed:
-                npred=self.model.integrate_geom(self.geom, self.gti) 
+                if isinstance(self.geom, RegionGeom):
+                    npred = SkyModel(spectral_model = self.model.spectral_model).integrate_geom(self.geom, self.gti) 
+                else:
+                    npred=self.model.integrate_geom(self.geom, self.gti) 
                 npred.data = npred.data.astype(self.dtype)
                 npred *= self.exposure.quantity
-                total = npred * self.acceptance.data
-                total = total.quantity.to_value('').sum() 
+                total = npred.quantity * self.acceptance.data
+                total = total.to_value('').sum() 
                 response = self.irf_cube * npred
                 axis_idx = np.arange(len(response.shape)) # the indices to sum over
                 axis_idx=np.delete(axis_idx, 0) # dim 0 needs to be the event axis
@@ -370,7 +392,7 @@ class UnbinnedEvaluator:
         lon, lat = self.model.position_lonlat
 
         separation = angular_separation(lon, lat, lon_cached, lat_cached)
-        changed = separation > CUTOUT_MARGIN.to_value(u.rad)
+        changed = separation > self.cutout_margin.to_value(u.rad)
 
 #         if changed:
 #             self._cached_position = lon, lat
@@ -394,3 +416,11 @@ class UnbinnedEvaluator:
         else:
             value_cached = self._cached_parameter_values[self._norm_idx]
             return value / value_cached
+        
+    @property
+    def is_pointsource(self):
+        return isinstance(self.model.spatial_model, PointSpatialModel)
+    
+    @property
+    def position_fixed(self):
+        return self.model.spatial_model.lon_0.frozen and self.model.spatial_model.lat_0.frozen

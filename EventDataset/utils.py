@@ -2,6 +2,7 @@ import numpy as np
 from gammapy.irf import EnergyDispersion2D, EDispMap, EDispKernelMap, EDispKernel, PSFMap, PSF3D, PSFKernel 
 from gammapy.maps import Map
 from astropy.nddata import block_reduce
+from gammapy.maps import RegionGeom
 
 def make_edisp_factors(edisp, geom, events, position=None, pointing=None, dtype=np.float64):
     """Calculate the energy dispersion factors for the events.
@@ -180,7 +181,7 @@ def make_exposure_factors(livetime, aeff, pointing, coords):
     return (exposure * livetime).to("m2 s")
 
 def make_acceptance(geom, mask, edisp, psf, model_pos, 
-                    pointing=None, max_radius=None, containment=0.999, factor=4, dtype=np.float64):
+                    pointing=None, max_radius=None, containment=0.999, factor=4, dtype=np.float64, debug=0):
     """Compute the acceptance cube with dimensions of `geom`. 
     The cube can be multiplied to the model which is integrated on `geom` 
     and the sum over the result will give the total number of model counts inside 
@@ -222,27 +223,28 @@ def make_acceptance(geom, mask, edisp, psf, model_pos,
     fake_true = e_reco.copy(name='energy_true')
     geom_model_mask = geom.to_image().to_cube([e_reco])
     
-    ## the PSF needs a larger map for evaluation
-    if isinstance(psf, (PSFMap, PSF3D)):
-        width_geom = geom.width.max()
-        if max_radius is None:
-            kwargs = {
-                "fraction": containment,
-                "energy_true": e_true.center,
-            }
-            if isinstance(psf, PSFMap):
-                kwargs['position'] = model_pos
-            elif isinstance(psf, PSF3D):
-                kwargs['offset'] = model_pos.separation(pointing)
-            radii = psf.containment_radius(**kwargs)
-            max_radius = np.max(radii)
-        geom_model_mask=geom_model_mask.to_odd_npix(max_radius + width_geom/2)
-        
-    ## interpolate the mask to the integration geometry on which the back folding takes place    
-    coords = geom_model_mask.get_coord()  
-    # the mask_safe in model geometry but with axis energy label energy_true
-    mask_model = Map.from_geom(geom=geom_model_mask.as_energy_true, 
-                               data=mask.interp_by_coord(coords))
+    if not isinstance(geom, RegionGeom):
+        ## the PSF needs a larger map for evaluation
+        if isinstance(psf, (PSFMap, PSF3D)):
+            width_geom = geom.width.max()
+            if max_radius is None:
+                kwargs = {
+                    "fraction": containment,
+                    "energy_true": e_true.center,
+                }
+                if isinstance(psf, PSFMap):
+                    kwargs['position'] = model_pos
+                elif isinstance(psf, PSF3D):
+                    kwargs['offset'] = model_pos.separation(pointing)
+                radii = psf.containment_radius(**kwargs)
+                max_radius = np.max(radii)
+            geom_model_mask=geom_model_mask.to_odd_npix(max_radius + width_geom/2)
+
+        ## interpolate the mask to the integration geometry on which the back folding takes place    
+        coords = geom_model_mask.get_coord()  
+        # the mask_safe in model geometry but with axis energy label energy_true
+        mask_model = Map.from_geom(geom=geom_model_mask.as_energy_true, 
+                                   data=mask.interp_by_coord(coords))
     
     ## create edisp 
     # because we want to convolve a reco map we do a trick and create a transposed EdispKernel
@@ -285,10 +287,13 @@ def make_acceptance(geom, mask, edisp, psf, model_pos,
   
     ## create the psf
     if isinstance(psf, PSFMap):
-        # need to interpolate to the e_true of the geom
         model_pos = psf._get_nearest_valid_position(model_pos)
-
-        geom_psf = geom.to_odd_npix(max_radius=max_radius)
+        if isinstance(geom, RegionGeom):
+            geom_psf = mask.geom.to_image().to_cube([e_true])
+        
+        else:
+            # need to interpolate to the e_true of the geom
+            geom_psf = geom.to_odd_npix(max_radius=max_radius)
         geom_upsampled = geom_psf.upsample(factor=factor)
         coords = geom_upsampled.get_coord(sparse=True)
         rad = coords.skycoord.separation(geom.center_skydir)
@@ -302,6 +307,7 @@ def make_acceptance(geom, mask, edisp, psf, model_pos,
         data = psf.psf_map.interp_by_coord(
         coords=coords,
         method="linear",
+        fill_value=0
         )
 
         kernel_map = Map.from_geom(geom=geom_upsampled, data=np.clip(data, 0, np.inf))
@@ -318,9 +324,24 @@ def make_acceptance(geom, mask, edisp, psf, model_pos,
         
     else: psf_kernel = None
     
-    acceptance=mask_model.apply_edisp(edisp_kernelT)  # First apply the edisp to go from reco energy to true energy
-    if psf_kernel:
-        acceptance=acceptance.convolve(psf_kernel)
-        acceptance=acceptance.cutout(geom.center_skydir, width_geom)
-    acceptance.data = acceptance.data.astype(dtype)
+    if isinstance(geom, RegionGeom):
+        mask2 = mask.copy()
+        mask2._geom = mask.geom.as_energy_true
+        acc_cube = psf_kernel.psf_kernel_map.quantity * mask2.apply_edisp(edisp_kernelT).data
+        acceptance = acc_cube.sum(axis=(1,2), keepdims=True)
+        if debug==1:
+            return mask2.apply_edisp(edisp_kernelT)
+        if debug==2:
+            return psf_kernel
+        
+    else:
+        acceptance=mask_model.apply_edisp(edisp_kernelT)  # First apply the edisp to go from reco energy to true energy
+        if debug==1:
+            return acceptance
+        if debug==2:
+            return psf_kernel
+        if psf_kernel:
+            acceptance=acceptance.convolve(psf_kernel)
+            acceptance=acceptance.cutout(geom.center_skydir, width_geom)
+        acceptance.data = acceptance.data.astype(dtype)
     return acceptance
