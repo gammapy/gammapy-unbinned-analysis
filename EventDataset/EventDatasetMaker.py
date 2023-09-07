@@ -97,5 +97,7 @@ class EventDatasetMaker(Maker):
         
         for key in self.selection:
             kwargs[key] = getattr(dataset, key, None)
+            
+        kwargs['gti'] = dataset.gti
                           
         return EventDataset(name=dataset.name, **kwargs)

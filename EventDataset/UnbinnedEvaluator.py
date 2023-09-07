@@ -62,11 +62,20 @@ class UnbinnedEvaluator:
         dtype=np.float32
     ):
 
-        self.model = model
+        self.temporal_model = model.temporal_model
+        if self.temporal_model:
+            ### need to decouple the rest of the model
+            mkwargs={}
+            for attr in ['name', 'spectral_model', 'spatial_model', 'apply_irf', 'datasets_names']:
+                # note covariance_data is not set because of different shape due to temporal parameters
+                mkwargs[attr] = getattr(model, attr)
+            self.model = SkyModel(**mkwargs)
+        else:
+            self.model = model
         self.events = events
         self.mask = mask
         self.exposure= exposure
-        self.gti = gti  # TODO: Check if we really need this
+        self.gti = gti 
         self.use_cache = use_cache
         self._init_position = None
         self.contributes = True
@@ -94,6 +103,7 @@ class UnbinnedEvaluator:
         # define cached computations
         self._cached_parameter_values = None
         self._cached_parameter_values_spatial = None
+        self._cached_parameter_values_temporal = None
         self._cached_position = (0, 0)
         self._computation_cache = None
         self._neval = 0  # for debugging
@@ -133,8 +143,8 @@ class UnbinnedEvaluator:
                         geom=geom.cutout(self.model.position, (radius+self.cutout_margin)*2)
 
             # adjust the spatial binsize if neccessary
-            res_scale = self.spatialbs or self.model.evaluation_bin_size_min
-    #         res_scale = self.spatialbs if self.spatialbs is not None else self.model.evaluation_bin_size_min # avoids AstropyDeprecationWarning
+#             res_scale = self.spatialbs or self.model.evaluation_bin_size_min
+            res_scale = self.spatialbs if self.spatialbs is not None else self.model.evaluation_bin_size_min # avoids AstropyDeprecationWarning
             if res_scale is not None:
                 pixel_size=np.max(geom.pixel_scales)
                 if pixel_size > res_scale:
@@ -221,6 +231,9 @@ class UnbinnedEvaluator:
             coords = events.map_coord(mask.geom)
             events = events.select_row_subset(self.event_mask)
             
+            if self.temporal_model:
+                self.event_times = events.time
+            
             if isinstance(self.model, TemplateNPredModel):
                 # the TemplateNpredModel only needs to be interpolated at 
                 # the events' coordinates. No IRF cube necessary.
@@ -231,18 +244,20 @@ class UnbinnedEvaluator:
             self.exposure = exposure.interp_to_geom(self.geom)
             ### rely on float32 precision
             self.exposure.data = self.exposure.data.astype(self.dtype)
+            if not self.model.apply_irf['exposure']:
+                self.exposure.data = 1.0
             if use_modelpos == True or isinstance(self.geom, RegionGeom):
                 position = self.model.position
             else: position=None
             # get the edisp kernel factors for each event
-            if edisp is not None:
+            if edisp is not None and self.model.apply_irf['edisp']:
                 edisp_factors = make_edisp_factors(edisp, self.geom, events, position=position, dtype=self.dtype)
                 self.irf_unit /= u.TeV
             else:
                 edisp_factors = 1.0
 
             # get the psf kernel factors for each event
-            if psf is not None and self.model.spatial_model:
+            if psf is not None and self.model.spatial_model and self.model.apply_irf['psf']:
                 # TODO: Set a width according to a containment
                 self._psf_width = psf.psf_map.geom.axes['rad'].edges.max()
                 if isinstance(self.geom, RegionGeom):
@@ -293,6 +308,7 @@ class UnbinnedEvaluator:
             
         else:
             if not self.parameter_norm_only_changed:
+            
                 if isinstance(self.geom, RegionGeom):
                     npred = SkyModel(spectral_model = self.model.spectral_model).integrate_geom(self.geom, self.gti) 
                 else:
@@ -301,7 +317,13 @@ class UnbinnedEvaluator:
                 npred *= self.exposure.quantity
                 total = npred.quantity * self.acceptance.data
                 total = total.to_value('').sum() 
-                response = self.irf_cube * npred
+                if self.temporal_model:
+                    total *= np.sum(self.temporal_model.integral(self.gti.time_start, self.gti.time_stop))
+                    time_factors = self.temporal_model(self.event_times)
+                    self._cached_parameter_values_temporal = self.temporal_model.parameters.value
+                else:
+                    time_factors = [1]
+                response = np.expand_dims(time_factors, axis=tuple(np.arange(1,len(self.irf_cube.shape)))) * self.irf_cube * npred
                 axis_idx = np.arange(len(response.shape)) # the indices to sum over
                 axis_idx=np.delete(axis_idx, 0) # dim 0 needs to be the event axis
                 response = response.to_value(self.irf_unit).sum(axis=tuple(axis_idx))
@@ -344,7 +366,7 @@ class UnbinnedEvaluator:
 
         # TODO: possibly allow for a tolerance here?
         changed = ~np.all(self._cached_parameter_values == values)
-        return changed
+        return changed or self.parameters_temporal_changed(reset=False)
 
     @property
     def parameter_norm_only_changed(self):
@@ -358,7 +380,7 @@ class UnbinnedEvaluator:
                 # then the cache can't be used
                 return False
             changed = self._cached_parameter_values != values
-            norm_only_changed = np.count_nonzero(changed) == 1 and changed[idx]
+            norm_only_changed = np.count_nonzero(changed) == 1 and changed[idx] and not self.parameters_temporal_changed(reset=False)
         return norm_only_changed
 
     def parameters_spatial_changed(self, reset=True):
@@ -379,6 +401,30 @@ class UnbinnedEvaluator:
 
         if changed and reset:
             self._cached_parameter_values_spatial = values
+
+        return changed
+    
+    def parameters_temporal_changed(self, reset=True):
+        """Parameters changed of temporal model. Need this because the temporal model is decoupled from the rest of the model.
+        Parameters
+        ----------
+        reset : bool
+            Reset cached values
+        Returns
+        -------
+        changed : bool
+            Whether temporal parameters changed.
+        """
+        if self.temporal_model:
+            values = self.temporal_model.parameters.value
+
+            # TODO: possibly allow for a tolerance here?
+            changed = ~np.all(self._cached_parameter_values_temporal == values)
+
+            if changed and reset:
+                self._cached_parameter_values_temporal = values
+        else:
+            changed = False
 
         return changed
 

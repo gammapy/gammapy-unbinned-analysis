@@ -98,7 +98,8 @@ class EventDataset(gammapy.datasets.Dataset):
         mask_fit=None,
         meta_table=None,
         name=None,
-        events=None
+        events=None,
+        gti=None
     ): 
  
         self._name = make_name(name)
@@ -129,6 +130,7 @@ class EventDataset(gammapy.datasets.Dataset):
             )
 
         self.edisp = edisp
+        self.gti = gti
         self._evaluators=None
             
     def __str__(self):
@@ -267,7 +269,7 @@ class EventDataset(gammapy.datasets.Dataset):
             
             for model in models:
                 if not isinstance(model, FoVBackgroundModel):
-                    evaluator = UnbinnedEvaluator(model=model)
+                    evaluator = UnbinnedEvaluator(model=model, gti=self.gti)
                     self._evaluators[model.name] = evaluator
         
         self._models = models             
