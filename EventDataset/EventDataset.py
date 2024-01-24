@@ -108,12 +108,15 @@ class EventDataset(gammapy.datasets.Dataset):
         self._background_parameters_cached = None
         self.exposure = exposure     
         self.geom=geom
-        self.events = events       
+        self.events = events 
+        self.edisp = edisp
+        self.gti = gti
+        self._evaluators=None
         
         self.mask_fit = mask_fit
         self.mask_safe = mask_safe
         
-        self._models = models
+        self.models = models
         self.meta_table = meta_table
         
         if psf and not isinstance(psf, (PSFMap, HDULocation)):
@@ -129,9 +132,6 @@ class EventDataset(gammapy.datasets.Dataset):
                 f"object, got `{type(edisp)}` instead."
             )
 
-        self.edisp = edisp
-        self.gti = gti
-        self._evaluators=None
             
     def __str__(self):
         str_ = f"{self.__class__.__name__}\n"
@@ -177,6 +177,8 @@ class EventDataset(gammapy.datasets.Dataset):
     @property
     def event_mask(self):
         """Entry for each event whether it is inside the mask or not"""
+        if self.mask is None:
+            return np.ones(len(self.events.table), dtype=bool)
         coords = self.events.map_coord(self.mask.geom)
         return self.mask.get_by_coord(coords)==1
     
@@ -326,7 +328,8 @@ class EventDataset(gammapy.datasets.Dataset):
                     self.psf,
                     self.edisp,
                     self.mask,
-                    use_modelpos=True
+                    use_modelpos=True,
+                    geom=self.geom,
                 )
 
             if evaluator.contributes:
@@ -348,12 +351,15 @@ class EventDataset(gammapy.datasets.Dataset):
 
         # case of bkg and extra model
         if self.background_model and self.background:
-            if self.background_model.parameters.value[self._bkg_norm_idx] == 0:
+            norm_value = self.background_model.parameters.value[self._bkg_norm_idx]
+            if norm_value == 0 or not np.isfinite(norm_value):
                 # just return 0, don't update cache or cached parameters
                 return (np.zeros(len(self.events_in_mask.table)), 0.0)
             elif self._background_parameter_norm_only_changed and self._response_bkg_cached is not None:
                 self._response_bkg_cached[0] *= self.bkg_renorm()
                 self._response_bkg_cached[1] *= self.bkg_renorm()
+                if not np.isfinite(self._response_bkg_cached[1]):
+                    print(f'renorm: {self.bkg_renorm()}, {self.background_model.parameters.value[self._bkg_norm_idx]}, {self._background_parameters_cached[self._bkg_norm_idx]}')
 #                 print('simply renorming bkg')
                 self._background_parameters_cached = self.background_model.parameters.value
                 return self._response_bkg_cached
@@ -368,6 +374,8 @@ class EventDataset(gammapy.datasets.Dataset):
                 self._response_bkg_cached = [bkg_map.interp_by_coord(coords, method='linear'), bkg_sum]
 #                 print('full calculation of bkg')
                 self._background_parameters_cached = self.background_model.parameters.value
+                if not np.isfinite(self._response_bkg_cached[1]):
+                    print(f'full rec: {self.bkg_renorm()}, {self.background_model.parameters.value[self._bkg_norm_idx]}, {self._background_parameters_cached[self._bkg_norm_idx]}')
                 return self._response_bkg_cached
     
         # case of bkg but no extra model        

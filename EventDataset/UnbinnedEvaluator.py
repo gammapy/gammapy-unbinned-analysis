@@ -4,9 +4,9 @@ import astropy.units as u
 from astropy.coordinates.angle_utilities import angular_separation
 from astropy.utils import lazyproperty
 from regions import CircleSkyRegion, PointSkyRegion
-from gammapy.modeling.models import PointSpatialModel, TemplateNPredModel, SkyModel
-from gammapy.maps import RegionGeom
-from utils import *
+from gammapy.modeling.models import PointSpatialModel, TemplateNPredModel, SkyModel, TemplateSpatialModel
+from gammapy.maps import RegionGeom, Map
+from utils_unbinned import *
 # import warnings
 
 PSF_CONTAINMENT = 0.999
@@ -62,16 +62,21 @@ class UnbinnedEvaluator:
         dtype=np.float32
     ):
 
-        self.temporal_model = model.temporal_model
-        if self.temporal_model:
-            ### need to decouple the rest of the model
-            mkwargs={}
-            for attr in ['name', 'spectral_model', 'spatial_model', 'apply_irf', 'datasets_names']:
-                # note covariance_data is not set because of different shape due to temporal parameters
-                mkwargs[attr] = getattr(model, attr)
-            self.model = SkyModel(**mkwargs)
-        else:
+        if isinstance(model, TemplateNPredModel):
+            ### TemplateNpredModel has no attribute temporal_model 
+            ### Need to avoid the error
             self.model = model
+        else:
+            self.temporal_model = model.temporal_model
+            if self.temporal_model:
+                ### need to decouple the rest of the model
+                mkwargs={}
+                for attr in ['name', 'spectral_model', 'spatial_model', 'apply_irf', 'datasets_names']:
+                    # note covariance_data is not set because of different shape due to temporal parameters
+                    mkwargs[attr] = getattr(model, attr)
+                self.model = SkyModel(**mkwargs)
+            else:
+                self.model = model
         self.events = events
         self.mask = mask
         self.exposure= exposure
@@ -83,6 +88,7 @@ class UnbinnedEvaluator:
         self.energy_axis = energy_axis
         self.spatialbs = spatialbs
         self.geom = None
+        self.geom_reco = None
         self.irf_cube = None
         self._psf_width = 0.0 * u.deg
         self.dtype=dtype
@@ -120,7 +126,9 @@ class UnbinnedEvaluator:
         
     @property
     def cutout_margin(self):
-        if self.position_fixed:
+        if isinstance(self.model, (TemplateNPredModel, TemplateSpatialModel)):
+            return 0 *u.deg  # position_fixed throws erro for TemplateNPredModel
+        elif self.position_fixed:
             return 0 *u.deg
         else:
             return CUTOUT_MARGIN
@@ -136,7 +144,10 @@ class UnbinnedEvaluator:
 
             # cutout if neccessary
             if self.evaluation_mode == "local":
-                self.contributes = self.model.contributes(mask=self.mask, margin=self.psf_width)
+                if self.mask is None:
+                    self.contributes = True
+                else:
+                    self.contributes = self.model.contributes(mask=self.mask, margin=self.psf_width)
                 if self.contributes:
                     radius = self.model.evaluation_radius
                     if radius is not None:
@@ -145,7 +156,11 @@ class UnbinnedEvaluator:
             # adjust the spatial binsize if neccessary
 #             res_scale = self.spatialbs or self.model.evaluation_bin_size_min
             res_scale = self.spatialbs if self.spatialbs is not None else self.model.evaluation_bin_size_min # avoids AstropyDeprecationWarning
+            
             if res_scale is not None:
+                if res_scale<=0*u.deg:
+                    print(f'Bad required spatial resolution of {res_scale}. Setting to 0.01 deg')
+                    res_scale = 0.01*u.deg
                 pixel_size=np.max(geom.pixel_scales)
                 if pixel_size > res_scale:
                     geom = geom.upsample(int(np.ceil(pixel_size/res_scale)))
@@ -162,7 +177,10 @@ class UnbinnedEvaluator:
         """Check whether the model component has drifted away from its support."""
         # TODO: simplify and clean up
         if isinstance(self.model, TemplateNPredModel):
-            return False
+            if self.events is None or self.geom_reco is None:
+                return True
+            else:
+                return False
         elif not self.contributes:
             return False
         elif self.exposure is None:
@@ -199,7 +217,7 @@ class UnbinnedEvaluator:
         """Cutout width for the model component"""
         return self.psf_width + 2 * (self.model.evaluation_radius + self.cutout_margin)
 
-    def update(self, events, exposure, psf=None, edisp=None, mask=None, use_modelpos=False):
+    def update(self, events, exposure, psf=None, edisp=None, mask=None, use_modelpos=False, geom=None):
         """Update the integration geometry, the kernel cube and the acceptance cube of the EventEvaluator, 
         based on the current position of the model component.
         Parameters
@@ -221,23 +239,32 @@ class UnbinnedEvaluator:
         log.debug("Updating model evaluator")
         self.events = events
         self.mask = mask
+        
+        self.geom_reco = geom
+        if self.mask is not None:
+            self.geom_reco = mask.geom
+        if self.geom_reco is None:
+            log.warn("Need either mask or geom")
+        if isinstance(self.model, TemplateNPredModel):
+            # the TemplateNpredModel only needs to be interpolated at 
+            # the events' coordinates. No IRF cube necessary.
+            return
         self.irf_unit = u.Unit('')
         self._cached_position = self.model.position_lonlat
-        if self.evaluation_mode == "local":
+        if self.evaluation_mode == "local" and self.mask is not None:
             self.contributes = self.model.contributes(mask=mask, margin=self.psf_width)
+        else:
+            self.contributes= True
         if self.contributes:
             # 1. get the contributing events which are close enough to the model
             del self.event_mask
-            coords = events.map_coord(mask.geom)
+            coords = events.map_coord(self.geom_reco)
             events = events.select_row_subset(self.event_mask)
             
             if self.temporal_model:
                 self.event_times = events.time
             
-            if isinstance(self.model, TemplateNPredModel):
-                # the TemplateNpredModel only needs to be interpolated at 
-                # the events' coordinates. No IRF cube necessary.
-                return
+            
             
             # init the proper integration geometry
             self._init_geom(exposure)
@@ -277,7 +304,7 @@ class UnbinnedEvaluator:
             
             if mask is not None:
                 self.acceptance = make_acceptance(self.geom, mask, edisp, psf, self.model.position, dtype=self.dtype, factor=4)
-            else: self.acceptance = 1.0
+            else: self.acceptance = Map.from_geom(self.geom, data = 1)
             
         self.reset_cache_properties()
         self._computation_cache = None
@@ -285,10 +312,13 @@ class UnbinnedEvaluator:
     @lazyproperty
     def event_mask(self):
         """create a mask for events too far away from the model"""
-        # the spatial part: separation from the model center
-        separation = self.events.radec.separation(self.model.position)
-        # TODO: Define an individual width for each event dependent on its energy
-        mask_spatial = separation < self.cutout_width/2 
+        if isinstance(self.model, TemplateNPredModel):
+            mask_spatial = self.model.map.geom.contains(self.events.map_coord(self.model.map.geom))
+        else:
+            # the spatial part: separation from the model center
+            separation = self.events.radec.separation(self.model.position)
+            # TODO: Define an individual width for each event dependent on its energy
+            mask_spatial = separation < self.cutout_width/2 
         
         # possibility for an energy or temporal mask
         
@@ -302,9 +332,13 @@ class UnbinnedEvaluator:
         if isinstance(self.model, TemplateNPredModel):
             npred = self.model.evaluate()
             # interpolate on the events
-            coords = self.events.map_coord(self.mask.geom)
+            events = self.events.select_row_subset(self.event_mask)
+            coords = events.map_coord(self.geom_reco)
             response = npred.interp_by_coord(coords)
-            total = np.sum(npred.data[self.mask.data])
+            if self.mask is None:
+                total = np.sum(npred.data)
+            else:
+                total = np.sum(npred.data[self.mask.data])
             
         else:
             if not self.parameter_norm_only_changed:
@@ -469,4 +503,8 @@ class UnbinnedEvaluator:
     
     @property
     def position_fixed(self):
-        return self.model.spatial_model.lon_0.frozen and self.model.spatial_model.lat_0.frozen
+        try:
+            b=self.model.spatial_model.lon_0.frozen and self.model.spatial_model.lat_0.frozen
+        except AttributeError:
+            b=True
+        return b
