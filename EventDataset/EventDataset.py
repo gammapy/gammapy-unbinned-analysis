@@ -14,6 +14,7 @@ from gammapy.utils.fits import HDULocation, LazyFitsData
 from gammapy.irf import EDispKernelMap, EDispMap, PSFKernel, PSFMap
 import gammapy.makers.utils 
 from gammapy.data import GTI
+from gammapy.datasets import MapDataset
 from UnbinnedEvaluator import UnbinnedEvaluator
 from gammapy.stats.fit_statistics_cython import TRUNCATION_VALUE
 
@@ -107,7 +108,7 @@ class EventDataset(gammapy.datasets.Dataset):
         self._response_bkg_cached = None
         self._background_parameters_cached = None
         self.exposure = exposure     
-        self.geom=geom
+        self._geom=geom
         self.events = events 
         self.edisp = edisp
         self.gti = gti
@@ -196,8 +197,17 @@ class EventDataset(gammapy.datasets.Dataset):
             Dict of map geometries involved in the dataset.
         """
         geoms = {}
-
-        geoms["geom"] = self._geom
+        
+        if self._geom is not None:
+            geoms["geom"] = self._geom
+        else:
+            if self.mask:
+                geoms["geom"] = self.mask.geom
+            if self.exposure:
+                geom = self.exposure.geom.to_image()
+                axis = self.exposure.geom.axes["energy_true"].copy()
+                axis._name = "energy"
+                geoms['geom'] = geom.to_cube([axis])
 
         if self.exposure:
             geoms["geom_exposure"] = self.exposure.geom
@@ -490,3 +500,45 @@ class EventDataset(gammapy.datasets.Dataset):
         info["stat_sum"] = float(stat_sum)
    
         return info
+
+    def to_mapdataset(self, name=None, geom=None):
+        kwargs={}
+        if name is None:
+            kwargs['name']=self.name
+        else:
+            kwargs['name']=name
+        if geom is None:
+            geom = self.geoms['geom']
+            
+        counts = Map.from_geom(geom)
+        counts.fill_events(self.events)
+        kwargs['counts'] = counts
+            
+        for key in [
+            "edisp",
+            "psf",
+            "mask_safe",
+            "mask_fit",
+            "exposure",
+            "gti",
+            "meta_table",
+            "models",
+        ]:
+            kwargs[key] = getattr(self, key)
+            
+        kwargs['background'] = self.background
+        
+        return MapDataset(**kwargs)
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
