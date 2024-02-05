@@ -17,6 +17,7 @@ from gammapy.data import GTI
 from gammapy.datasets import MapDataset
 from UnbinnedEvaluator import UnbinnedEvaluator
 from gammapy.stats.fit_statistics_cython import TRUNCATION_VALUE
+from astropy.utils import lazyproperty
 
 PSF_CONTAINMENT = 0.999
 CUTOUT_MARGIN = 0.1 * u.deg
@@ -114,8 +115,8 @@ class EventDataset(gammapy.datasets.Dataset):
         self.gti = gti
         self._evaluators=None
         
-        self.mask_fit = mask_fit
-        self.mask_safe = mask_safe
+        self._mask_fit = mask_fit
+        self._mask_safe = mask_safe
         
         self.models = models
         self.meta_table = meta_table
@@ -175,7 +176,7 @@ class EventDataset(gammapy.datasets.Dataset):
         return str_.expandtabs(tabsize=2)
 
     
-    @property
+    @lazyproperty
     def event_mask(self):
         """Entry for each event whether it is inside the mask or not"""
         if self.mask is None:
@@ -183,7 +184,7 @@ class EventDataset(gammapy.datasets.Dataset):
         coords = self.events.map_coord(self.mask.geom)
         return self.mask.get_by_coord(coords)==1
     
-    @property
+    @lazyproperty
     def events_in_mask(self):
         return self.events.select_row_subset(self.event_mask)
                 
@@ -262,6 +263,26 @@ class EventDataset(gammapy.datasets.Dataset):
         kwargs["mask_safe"] = Map.from_geom(geom, unit="", dtype=bool)
 
         return cls(**kwargs)
+    
+    @property
+    def mask_safe(self):
+        return self._mask_safe
+    
+    @mask_safe.setter
+    def mask_safe(self, mask):
+        del self.event_mask
+        del self.events_in_mask
+        self._mask_safe = mask
+        
+    @property
+    def mask_fit(self):
+        return self._mask_fit
+    
+    @mask_fit.setter
+    def mask_fit(self, mask):
+        del self.event_mask
+        del self.events_in_mask
+        self._mask_fit = mask
 
     @property
     def models(self):
@@ -477,7 +498,7 @@ class EventDataset(gammapy.datasets.Dataset):
         if self.exposure is not None:
             mask_exposure = self.exposure.data > 0
 
-            if self.mask_safe is not None:
+            if self._mask_safe is not None:
                 mask_spatial = self.mask_safe.reduce_over_axes(func=np.logical_or).data
                 mask_exposure = mask_exposure & mask_spatial[np.newaxis, :, :]
 
