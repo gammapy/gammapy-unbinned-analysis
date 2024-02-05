@@ -66,6 +66,7 @@ class UnbinnedEvaluator:
             ### TemplateNpredModel has no attribute temporal_model 
             ### Need to avoid the error
             self.model = model
+            self.temporal_model = None
         else:
             self.temporal_model = model.temporal_model
             if self.temporal_model:
@@ -337,21 +338,22 @@ class UnbinnedEvaluator:
     @lazyproperty
     def _compute_npred(self):
         """Compute npred"""
-        if isinstance(self.model, TemplateNPredModel):
-            npred = self.model.evaluate()
-            npred.quantity /= npred.geom.bin_volume().to_value(1/self.irf_unit)
-            # interpolate on the events
-            events = self.events.select_row_subset(self.event_mask)
-            coords = events.map_coord(self.geom_reco)
-            response = npred.interp_by_coord(coords)#.to_value(self.irf_unit)
-            if self.mask is None:
-                total = np.sum(npred.data)
+        if not self.parameter_norm_only_changed:
+
+            if isinstance(self.model, TemplateNPredModel):
+                npred = self.model.evaluate()
+                npred.data /= npred.geom.bin_volume().to_value(1/self.irf_unit)
+                npred.data = npred.data.astype(self.dtype)
+                # interpolate on the events
+                events = self.events.select_row_subset(self.event_mask)
+                coords = events.map_coord(self.geom_reco)
+                response = npred.interp_by_coord(coords)
+                if self.mask is None:
+                    total = np.sum(npred.data)
+                else:
+                    total = np.sum(npred.data[self.mask.data])
+
             else:
-                total = np.sum(npred.data[self.mask.data])
-            
-        else:
-            if not self.parameter_norm_only_changed:
-            
                 if isinstance(self.geom, RegionGeom):
                     npred = SkyModel(spectral_model = self.model.spectral_model).integrate_geom(self.geom, self.gti) 
                 else:
@@ -370,14 +372,14 @@ class UnbinnedEvaluator:
                 axis_idx = np.arange(len(response.shape)) # the indices to sum over
                 axis_idx=np.delete(axis_idx, 0) # dim 0 needs to be the event axis
                 response = response.to_value(self.irf_unit).sum(axis=tuple(axis_idx))
-                self._computation_cache = [response, total]
-                self._cached_parameter_values = self.model.parameters.value
-            else:
-                response, total = self._computation_cache
-                response *= self.renorm()
-                total *= self.renorm()
-                self._computation_cache = [response, total]
-                self._cached_parameter_values = self.model.parameters.value
+            self._computation_cache = [response, total]
+            self._cached_parameter_values = self.model.parameters.value
+        else:
+            response, total = self._computation_cache
+            response *= self.renorm()
+            total *= self.renorm()
+            self._computation_cache = [response, total]
+            self._cached_parameter_values = self.model.parameters.value
         return [response, total]
 
     @property
