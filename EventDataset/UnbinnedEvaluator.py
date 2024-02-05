@@ -342,17 +342,18 @@ class UnbinnedEvaluator:
 
             if isinstance(self.model, TemplateNPredModel):
                 npred = self.model.evaluate()
-                npred.data /= npred.geom.bin_volume().to_value(1/self.irf_unit)
-                npred.data = npred.data.astype(self.dtype)
-                # interpolate on the events
-                events = self.events.select_row_subset(self.event_mask)
-                coords = events.map_coord(self.geom_reco)
-                response = npred.interp_by_coord(coords)
                 if self.mask is None:
                     total = np.sum(npred.data)
                 else:
                     total = np.sum(npred.data[self.mask.data])
-
+                ### the response array need to have the same units as the other response arrays, the factor does not matter here as it enters the stat_sum as log
+                ### the total number needs to be unitless (just the number of counts)
+                npred.data /= npred.geom.bin_volume().to_value(1/self.irf_unit)
+                # interpolate on the events
+                events = self.events.select_row_subset(self.event_mask)
+                coords = events.map_coord(self.geom_reco)
+                response = npred.interp_by_coord(coords)
+                
             else:
                 if isinstance(self.geom, RegionGeom):
                     npred = SkyModel(spectral_model = self.model.spectral_model).integrate_geom(self.geom, self.gti) 
