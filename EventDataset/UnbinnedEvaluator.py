@@ -90,7 +90,7 @@ class UnbinnedEvaluator:
         self.geom = None
         self.geom_reco = None
         self.irf_cube = None
-        self._psf_width = 0.0 * u.deg
+#         self._psf_width = 0.0 * u.deg
         self.dtype=dtype
         
         if evaluation_mode not in {"local", "global"}:
@@ -194,14 +194,14 @@ class UnbinnedEvaluator:
         else:
             return self.irf_position_changed
 
-    @property
-    def psf_width(self):
-        """Width of the PSF"""
-        try:
-            e=self.exposure.geom.axes['energy_true'].center[0]
-            return self.psf.containment_radius(0.99, e, self.model.position)
-        except:
-            return 1*u.deg
+#     @property
+#     def psf_width(self):
+#         """Width of the PSF"""
+#         try:
+#             e=self.exposure.geom.axes['energy_true'].center[0]
+#             return self.psf.containment_radius(0.99, e, self.model.position)
+#         except:
+#             return 1*u.deg
 
     def use_psf_containment(self, geom):
         """Use psf containment for point sources and circular regions"""
@@ -240,12 +240,19 @@ class UnbinnedEvaluator:
         self.events = events
         self.mask = mask
         
+        if psf is not None:
+            e=exposure.geom.axes['energy_true'].center[0]
+            self.psf_width = psf.containment_radius(0.99, e, self.model.position)*2
+        else:
+            self.psf_width = 1*u.deg
+        
         self.geom_reco = geom
         if self.mask is not None:
             self.geom_reco = mask.geom
         if self.geom_reco is None:
             log.warn("Need either mask or geom")
         if isinstance(self.model, TemplateNPredModel):
+            self.irf_unit = 1/u.TeV/u.sr
             # the TemplateNpredModel only needs to be interpolated at 
             # the events' coordinates. No IRF cube necessary.
             return
@@ -302,9 +309,10 @@ class UnbinnedEvaluator:
             # maybe use sparse matrix
             self.irf_cube *= edisp_factors
             
-            if mask is not None:
+            if self.mask is not None:
                 self.acceptance = make_acceptance(self.geom, mask, edisp, psf, self.model.position, dtype=self.dtype, factor=4)
-            else: self.acceptance = Map.from_geom(self.geom, data = 1)
+            else: 
+                self.acceptance = Map.from_geom(self.geom, data = 1)
             
         self.reset_cache_properties()
         self._computation_cache = None
@@ -331,10 +339,11 @@ class UnbinnedEvaluator:
         """Compute npred"""
         if isinstance(self.model, TemplateNPredModel):
             npred = self.model.evaluate()
+            npred.quantity /= npred.geom.bin_volume().to_value(1/self.irf_unit)
             # interpolate on the events
             events = self.events.select_row_subset(self.event_mask)
             coords = events.map_coord(self.geom_reco)
-            response = npred.interp_by_coord(coords)
+            response = npred.interp_by_coord(coords)#.to_value(self.irf_unit)
             if self.mask is None:
                 total = np.sum(npred.data)
             else:
@@ -386,7 +395,7 @@ class UnbinnedEvaluator:
         """
         if self.model.parameters.value[self._norm_idx] == 0:
             # just return 0, don't update cache or cached parameters
-            return [np.zeros(self.irf_cube.shape[0], dtype=self.dtype), 0.0]
+            return [np.zeros(self.event_mask.sum(), dtype=self.dtype), 0.0]
 
         if self.parameters_changed or not self.use_cache:
             del self._compute_npred
