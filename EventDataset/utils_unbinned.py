@@ -268,7 +268,7 @@ def make_acceptance(geom, mask, edisp, psf, model_pos,
         # different axis probably need new normalizationand this is not tested
         assert e_reco == edisp.edisp_map.geom.axes["energy"]
         coords = {
-            "skycoord": model_gauss.position,
+            "skycoord": model_pos,
             "energy_true": e_true.center,
             "energy": e_reco.center[:,None],
         }
