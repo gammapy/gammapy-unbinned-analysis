@@ -339,7 +339,7 @@ class EventDataset(gammapy.datasets.Dataset):
                     self.edisp,
                     self.mask,
                     use_modelpos=True,
-                    geom=self.geom,
+                    geom=self._geom,
                 )
 
             if evaluator.contributes:
