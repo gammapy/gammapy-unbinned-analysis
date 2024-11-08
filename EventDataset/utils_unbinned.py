@@ -3,6 +3,7 @@ from gammapy.irf import EnergyDispersion2D, EDispMap, EDispKernelMap, EDispKerne
 from gammapy.maps import Map
 from astropy.nddata import block_reduce
 from gammapy.maps import RegionGeom
+from gammapy.datasets.utils import apply_edisp
 
 def make_edisp_factors(edisp, geom, events, position=None, pointing=None, dtype=np.float64):
     """Calculate the energy dispersion factors for the events.
@@ -32,7 +33,9 @@ def make_edisp_factors(edisp, geom, events, position=None, pointing=None, dtype=
             the differential probablity for each true energy bin 
             to reconstruct at the event's energy.
         """
-    e_axis_true = geom.axes['energy_true']
+    
+    factor = 10 # factor to upsample the true energy axis for better precision for events between the bin centers
+    e_axis_true = geom.axes['energy_true'].upsample(factor)
     if position is None:
         # interpolate on the true coordinates of geom
         coords = {'skycoord': geom.get_coord(sparse=True).skycoord.squeeze()[None,None,...]}
@@ -55,6 +58,7 @@ def make_edisp_factors(edisp, geom, events, position=None, pointing=None, dtype=
     elif isinstance(edisp, EDispKernelMap):
         # projected already with energy axis
         ## TODO: Print warning that KernelMap is not precise
+        print('Warning: The values for EDispKernelMap might not be precise')
         e_reco_bins = edisp.edisp_map.geom.axes['energy'].edges.diff()
         edisp = edisp.copy() # so we don't change the original data 
         edisp.edisp_map.quantity = edisp.edisp_map.quantity/ e_reco_bins[:,None,None]
@@ -77,7 +81,11 @@ def make_edisp_factors(edisp, geom, events, position=None, pointing=None, dtype=
     else:
         raise ValueError("No valid edisp class. \
 Need one of the following: EdispMap, EdispKernelMap, EnergyDispersion2D")
-    return factors.astype(dtype)
+    block_size = [1] * factors.ndim
+    idx = 1 # downsample along etrue; factors have (event,e_true,lon,lat)
+    block_size[idx] = factor
+    factors = block_reduce(factors, tuple(block_size), func=np.nanmean)
+    return np.clip(factors.astype(dtype), 0, np.inf)
 
 def make_psf_factors(psf, geom, events, position=None, pointing=None, dtype=np.float64, factor=4, min_split=10):
     """Calculate the energy dispersion factors for the events.
@@ -136,7 +144,7 @@ def make_psf_factors(psf, geom, events, position=None, pointing=None, dtype=np.f
             if 'energy_true' in psf.psf_map.geom.axes_names:
                 coords['energy_true'] = e_axis_true.center[:,None,None]
 
-            factors = psf.psf_map.interp_by_coord(coords, fill_value=0.)
+            factors = psf.psf_map.interp_by_coord(coords, fill_value=0., values_scale='linear')
             unit=psf.psf_map.unit  # for some reason the interpolated values have no units
 
         elif isinstance(psf, PSF3D):
@@ -155,7 +163,7 @@ def make_psf_factors(psf, geom, events, position=None, pointing=None, dtype=np.f
             raise ValueError("No valid psf class. \
     Need one of the following: PSFMap, PSF3D")
         factor_list.append(block_reduce(factors, tuple(block_size), func=np.nanmean))
-    return np.vstack(factor_list).astype(dtype)*unit
+    return np.vstack(np.clip(factor_list, 0, np.inf)).astype(dtype)*unit
 
 def make_exposure_factors(livetime, aeff, pointing, coords):
     """Get energy dispersion for a given event and true energy axis.
@@ -226,7 +234,7 @@ def make_acceptance(geom, mask, edisp, psf, model_pos,
     if not isinstance(geom, RegionGeom):
         ## the PSF needs a larger map for evaluation
         if isinstance(psf, (PSFMap, PSF3D)):
-            width_geom = geom.width.max()
+            width_geom = geom.width
             if max_radius is None:
                 kwargs = {
                     "fraction": containment,
@@ -238,7 +246,7 @@ def make_acceptance(geom, mask, edisp, psf, model_pos,
                     kwargs['offset'] = model_pos.separation(pointing)
                 radii = psf.containment_radius(**kwargs)
                 max_radius = np.max(radii)
-            geom_model_mask=geom_model_mask.to_odd_npix(max_radius + width_geom/2)
+            geom_model_mask=geom_model_mask.to_odd_npix(max_radius + width_geom.max()/2)
 
         ## interpolate the mask to the integration geometry on which the back folding takes place    
         coords = geom_model_mask.get_coord()  
@@ -327,21 +335,24 @@ def make_acceptance(geom, mask, edisp, psf, model_pos,
     if isinstance(geom, RegionGeom):
         mask2 = mask.copy()
         mask2._geom = mask.geom.as_energy_true
-        acc_cube = psf_kernel.psf_kernel_map.quantity * mask2.apply_edisp(edisp_kernelT).data
+#         acc_cube = psf_kernel.psf_kernel_map.quantity * mask2.apply_edisp(edisp_kernelT).data
+        acc_cube = psf_kernel.psf_kernel_map.quantity * apply_edisp(mask2, edisp_kernelT).data
         acceptance = acc_cube.sum(axis=(1,2), keepdims=True)
         if debug==1:
-            return mask2.apply_edisp(edisp_kernelT)
+#             return mask2.apply_edisp(edisp_kernelT)
+            return apply_edisp(mask2,edisp_kernelT)
         if debug==2:
             return psf_kernel
         
     else:
-        acceptance=mask_model.apply_edisp(edisp_kernelT)  # First apply the edisp to go from reco energy to true energy
+#         acceptance=mask_model.apply_edisp(edisp_kernelT)  # First apply the edisp to go from reco energy to true energy
+        acceptance=apply_edisp(mask_model, edisp_kernelT)
         if debug==1:
             return acceptance
         if debug==2:
             return psf_kernel
         if psf_kernel:
             acceptance=acceptance.convolve(psf_kernel)
-            acceptance=acceptance.cutout(geom.center_skydir, width_geom)
+            acceptance=acceptance.cutout(geom.center_skydir, width_geom.flatten())
         acceptance.data = acceptance.data.astype(dtype)
     return acceptance

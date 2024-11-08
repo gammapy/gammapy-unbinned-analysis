@@ -1,7 +1,8 @@
 import logging
 import numpy as np
 import astropy.units as u
-from astropy.coordinates.angle_utilities import angular_separation
+# from astropy.coordinates.angle_utilities import angular_separation
+from astropy.coordinates.angles.utils import angular_separation
 from astropy.utils import lazyproperty
 from regions import CircleSkyRegion, PointSkyRegion
 from gammapy.modeling.models import PointSpatialModel, TemplateNPredModel, SkyModel, TemplateSpatialModel
@@ -166,7 +167,10 @@ class UnbinnedEvaluator:
                 if pixel_size > res_scale:
                     geom = geom.upsample(int(np.ceil(pixel_size/res_scale)))
                 elif pixel_size < res_scale/2:
-                    geom = geom.downsample(int(np.floor(res_scale/pixel_size)))
+                    factor = int(np.floor(res_scale/pixel_size))
+                    if np.any(np.mod(geom.npix, factor) > 0):
+                        geom = geom.pad(np.mod(geom.npix, factor).flatten(), None)
+                    geom = geom.downsample(factor)
 
             # adjust the energy axis if given
             if self.energy_axis is not None:
@@ -218,7 +222,7 @@ class UnbinnedEvaluator:
         """Cutout width for the model component"""
         return self.psf_width + 2 * (self.model.evaluation_radius + self.cutout_margin)
 
-    def update(self, events, exposure, psf=None, edisp=None, mask=None, use_modelpos=False, geom=None):
+    def update(self, events, exposure, psf=None, edisp=None, mask=None, use_modelpos=False, geom=None, irf_unit_scale=1/u.TeV/u.deg**2):
         """Update the integration geometry, the kernel cube and the acceptance cube of the EventEvaluator, 
         based on the current position of the model component.
         Parameters
@@ -240,6 +244,7 @@ class UnbinnedEvaluator:
         log.debug("Updating model evaluator")
         self.events = events
         self.mask = mask
+        self.irf_unit_scale = irf_unit_scale
         
         if psf is not None:
             e=exposure.geom.axes['energy_true'].center[0]
@@ -252,12 +257,11 @@ class UnbinnedEvaluator:
             self.geom_reco = mask.geom
         if self.geom_reco is None:
             log.warn("Need either mask or geom")
-        if isinstance(self.model, TemplateNPredModel):
-            self.irf_unit = 1/u.TeV/u.sr
+        if isinstance(self.model, TemplateNPredModel):            
             # the TemplateNpredModel only needs to be interpolated at 
             # the events' coordinates. No IRF cube necessary.
             return
-        self.irf_unit = u.Unit('')
+#         self.irf_unit = u.Unit('')
         self._cached_position = self.model.position_lonlat
         if self.evaluation_mode == "local" and self.mask is not None:
             self.contributes = self.model.contributes(mask=mask, margin=self.psf_width)
@@ -287,9 +291,9 @@ class UnbinnedEvaluator:
             # get the edisp kernel factors for each event
             if edisp is not None and self.model.apply_irf['edisp']:
                 edisp_factors = make_edisp_factors(edisp, self.geom, events, position=position, dtype=self.dtype)
-                self.irf_unit /= u.TeV
+#                 self.irf_unit /= u.MeV
             else:
-                edisp_factors = 1.0
+                edisp_factors = 1.0 / u.TeV
 
             # get the psf kernel factors for each event
             if psf is not None and self.model.spatial_model and self.model.apply_irf['psf']:
@@ -299,16 +303,17 @@ class UnbinnedEvaluator:
                     psf_os_factor = 1 # important because of the downsampling in the end of make_psf_factors
                 else:
                     psf_os_factor = 1
-                self.irf_cube = make_psf_factors(psf, self.geom, events, position=position, dtype=self.dtype, factor=psf_os_factor)
-                self.irf_unit /= u.sr
+                irf_cube = make_psf_factors(psf, self.geom, events, position=position, dtype=self.dtype, factor=psf_os_factor)
+#                 self.irf_unit /= u.deg**2
             else:
-                self.irf_cube = 1.0
+                irf_cube = 1.0 / u.deg**2
 
             if len(self.geom.data_shape)+1 != len(edisp_factors.shape):
                 if not isinstance(edisp_factors, float):
                     edisp_factors = np.expand_dims(edisp_factors, axis=(-1,-2))
             # maybe use sparse matrix
-            self.irf_cube *= edisp_factors
+            irf_cube *= edisp_factors
+            self.irf_cube = irf_cube.to_value(self.irf_unit_scale)
             
             if self.mask is not None:
                 self.acceptance = make_acceptance(self.geom, mask, edisp, psf, self.model.position, dtype=self.dtype, factor=4)
@@ -348,7 +353,7 @@ class UnbinnedEvaluator:
                     total = np.sum(npred.data[self.mask.data])
                 ### the response array need to have the same units as the other response arrays, the factor does not matter here as it enters the stat_sum as log
                 ### the total number needs to be unitless (just the number of counts)
-                npred.data /= npred.geom.bin_volume().to_value(1/self.irf_unit)
+                npred.data /= npred.geom.bin_volume().to_value(1/self.irf_unit_scale)
                 # interpolate on the events
                 events = self.events.select_row_subset(self.event_mask)
                 coords = events.map_coord(self.geom_reco)
@@ -359,20 +364,20 @@ class UnbinnedEvaluator:
                     npred = SkyModel(spectral_model = self.model.spectral_model).integrate_geom(self.geom, self.gti) 
                 else:
                     npred=self.model.integrate_geom(self.geom, self.gti) 
-                npred.data = npred.data.astype(self.dtype)
-                npred *= self.exposure.quantity
-                total = npred.quantity * self.acceptance.data
-                total = total.to_value('').sum() 
+                npred_data = npred.data.astype(self.dtype) * self.exposure.quantity.to_value(1/npred.unit)
+                
+                total = npred_data * self.acceptance.data
+                total = total.sum() 
                 if self.temporal_model:
                     total *= np.sum(self.temporal_model.integral(self.gti.time_start, self.gti.time_stop))
                     time_factors = self.temporal_model(self.event_times)
                     self._cached_parameter_values_temporal = self.temporal_model.parameters.value
                 else:
                     time_factors = [1]
-                response = np.expand_dims(time_factors, axis=tuple(np.arange(1,len(self.irf_cube.shape)))) * self.irf_cube * npred
+                response = np.expand_dims(time_factors, axis=tuple(np.arange(1,len(self.irf_cube.shape)))) * self.irf_cube * npred_data
                 axis_idx = np.arange(len(response.shape)) # the indices to sum over
                 axis_idx=np.delete(axis_idx, 0) # dim 0 needs to be the event axis
-                response = response.to_value(self.irf_unit).sum(axis=tuple(axis_idx))
+                response = response.sum(axis=tuple(axis_idx))
             self._computation_cache = [response, total]
             self._cached_parameter_values = self.model.parameters.value
         else:

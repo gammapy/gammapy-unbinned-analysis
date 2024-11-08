@@ -187,6 +187,23 @@ class EventDataset(gammapy.datasets.Dataset):
     @lazyproperty
     def events_in_mask(self):
         return self.events.select_row_subset(self.event_mask)
+    
+    @lazyproperty
+    def irf_unit_scale(self):
+        """The absolute value of total_stat should not be too large so the precision of float64 is sufficient for precise gradient evaluation. 
+        An arbitrary offset can be introduced by scaling the response accordingly.
+        sum(log(response)) should be the same order of magnitude than npred_total.
+        Therefore we compute the response in units such that the log is on average 1/Ntot. 
+        As this depends on the spectrum an approximation could look like:
+        """
+        Ntot = self.event_mask.sum()
+        geom = self.geoms["geom"]
+        if self.mask is None:
+            RoI_volume = geom.bin_volume().sum()
+        else:
+            RoI_volume = geom.bin_volume()[self.mask].sum()
+        return Ntot/RoI_volume * 23.16
+#         return 1/u.TeV/u.sr
                 
     @property
     def geoms(self):
@@ -204,7 +221,7 @@ class EventDataset(gammapy.datasets.Dataset):
         else:
             if self.mask:
                 geoms["geom"] = self.mask.geom
-            if self.exposure:
+            elif self.exposure:
                 geom = self.exposure.geom.to_image()
                 axis = self.exposure.geom.axes["energy_true"].copy()
                 axis._name = "energy"
@@ -361,6 +378,7 @@ class EventDataset(gammapy.datasets.Dataset):
                     self.mask,
                     use_modelpos=True,
                     geom=self._geom,
+                    irf_unit_scale = self.irf_unit_scale,
                 )
 
             if evaluator.contributes:
@@ -401,7 +419,7 @@ class EventDataset(gammapy.datasets.Dataset):
                 bkg_sum = bkg_map.data[self.mask].sum()
                 coords = self.events_in_mask.map_coord(self.background.geom)
                 # we need to interpolate the differential bkg npred
-                bkg_map.quantity /= bkg_map.geom.bin_volume()
+                bkg_map.quantity /= bkg_map.geom.bin_volume().to_value(1/self.irf_unit_scale)
                 self._response_bkg_cached = [bkg_map.interp_by_coord(coords, method='linear'), bkg_sum]
 #                 print('full calculation of bkg')
                 self._background_parameters_cached = self.background_model.parameters.value
@@ -416,7 +434,7 @@ class EventDataset(gammapy.datasets.Dataset):
             bkg_sum = bkg_map.data[self.mask].sum()
             coords = self.events_in_mask.map_coord(self.background.geom)
             # we need to interpolate the differential bkg npred
-            bkg_map.quantity /= bkg_map.geom.bin_volume()
+            bkg_map.quantity /= bkg_map.geom.bin_volume().to_value(1/self.irf_unit_scale)
             self._response_bkg_cached = [bkg_map.interp_by_coord(coords, method='linear'), bkg_sum]
 #             print('interpolating because of no bkg model')
             return self._response_bkg_cached
